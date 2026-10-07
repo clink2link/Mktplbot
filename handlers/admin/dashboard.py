@@ -76,6 +76,20 @@ async def safe_sum(pool, column, table):
 
 
 
+
+async def safe_sum_paid_payments(pool):
+    try:
+        return await pool.fetchval(
+            """
+            SELECT COALESCE(SUM(amount), 0)
+            FROM payments
+            WHERE status='paid'
+            """
+        ) or 0
+    except Exception as e:
+        print("REVENUE ERROR:", e)
+        return 0
+
 # =========================
 # DASHBOARD
 # =========================
@@ -91,7 +105,7 @@ async def dashboard_text():
 
     # FINANCE
     balance = await safe_sum(pool, "balance", "users")
-    revenue = await safe_sum(pool, "total_income", "files")
+    revenue = await safe_sum_paid_payments(pool)
 
     # PAYMENT
     pending_payment = 0

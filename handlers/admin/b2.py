@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import get_pool
+from utils.b2_storage import encrypt_b2_secret
 from handlers.admin.admins import is_admin
 
 router = Router()
@@ -110,13 +111,27 @@ async def b2_bucket(message: Message, state: FSMContext):
 @router.message(B2State.key_id)
 async def b2_key_id(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id): return
-    await state.update_data(key_id=(message.text or '').strip()); await state.set_state(B2State.application_key)
+    await state.update_data(key_id=(message.text or '').strip())
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await state.set_state(B2State.application_key)
     await message.answer("Application Key?")
 
 @router.message(B2State.application_key)
 async def b2_application_key(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id): return
-    data=await state.get_data(); data["application_key"]=(message.text or '').strip()
+    data=await state.get_data()
+    data["application_key"]=(message.text or '').strip()
+
+    # Application keys are secrets. Remove the admin's message as soon as
+    # it has been captured so the credential is not left in chat history.
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     pool=await get_pool()
     await pool.execute("""
         INSERT INTO b2_storage_accounts(account_id,name,region,endpoint,bucket,key_id,application_key,is_enabled,is_target)
@@ -125,7 +140,8 @@ async def b2_application_key(message: Message, state: FSMContext):
           name=EXCLUDED.name, region=EXCLUDED.region, endpoint=EXCLUDED.endpoint,
           bucket=EXCLUDED.bucket, key_id=EXCLUDED.key_id, application_key=EXCLUDED.application_key,
           is_enabled=TRUE, updated_at=NOW()
-    """, data["account_id"],data["name"],data["region"],data["endpoint"],data["bucket"],data["key_id"],data["application_key"])
+    """, data["account_id"],data["name"],data["region"],data["endpoint"],data["bucket"],
+        data["key_id"], encrypt_b2_secret(data["application_key"]))
     await state.clear()
     await message.answer("✅ B2 berhasil disimpan. Credential tidak ditampilkan kembali.")
 
