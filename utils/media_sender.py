@@ -31,15 +31,9 @@ async def _safety_delay(kind: str, default: float = 0.0) -> float:
 
 
 def _storage_chat_id() -> Optional[int]:
-    try:
-        from config import STORAGE_CHANNEL_ID
-        return int(STORAGE_CHANNEL_ID)
-    except Exception:
-        try:
-            from config import CHANNEL_DB
-            return int(CHANNEL_DB)
-        except Exception:
-            return None
+    # Storage Channel has been removed from the active Pastele architecture.
+    # New media is delivered from Telegram file_id / B2 only.
+    return None
 
 
 async def _retry_sleep(exc: TelegramRetryAfter) -> None:
