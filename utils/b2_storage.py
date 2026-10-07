@@ -280,8 +280,8 @@ async def download_file_from_b2(
 ) -> bool:
     """Download one B2 object to a local file.
 
-    Used by the Showjs bridge. Failures are returned as False so the caller
-    can show a controlled error instead of crashing the bot.
+    Failures are returned as False so the caller can show a controlled
+    error instead of crashing the bot.
     """
     try:
         account = await get_b2_account(int(account_id))
