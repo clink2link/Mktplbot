@@ -66,8 +66,6 @@ async def get_pool():
 
     return _pool
 
-
-
 # ========================
 # CLOSE DATABASE
 # ========================
@@ -78,8 +76,6 @@ async def close_db():
         await _pool.close()
         _pool = None
         logging.info("🔌 Database closed")
-
-
 
 # ========================
 # INIT DATABASE (AUTO FIX)
@@ -97,16 +93,6 @@ async def init_db():
     async with pool.acquire() as conn:
         await conn.execute(sql)
         logging.info("✅ Database initialized from %s", schema_path.name)
-
-    # Encrypt legacy plaintext B2 credentials after the schema exists.
-    try:
-        from utils.b2_storage import migrate_b2_credentials, log_b2_credential_key_status
-        log_b2_credential_key_status()
-        await migrate_b2_credentials()
-    except Exception:
-        # Do not prevent the bot from starting because an optional B2
-        # credential migration failed; B2 operations will report the error.
-        logging.exception("⚠️ B2 credential migration failed")
 
 
 # ========================

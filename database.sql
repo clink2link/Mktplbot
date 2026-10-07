@@ -126,10 +126,6 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 INSERT INTO settings(key,value) VALUES
-('force_sub_enabled','on'),
-('force_sub_channel_id',''),
-('force_sub_channel_name','Force Sub'),
-('force_sub_channel_url',''),
 ('maintenance','off'),
 ('maintenance_text','Maintenance sedang berlangsung. Silakan coba lagi nanti.'),
 ('withdraw_enabled','on'),
@@ -141,11 +137,7 @@ INSERT INTO settings(key,value) VALUES
 ('manual_qr_message_id',''),
 ('manual_qr_file_id',''),
 ('binance_usdt_address',''),
-('binance_account',''),
-('b2_upload_enabled','on'),
-('showjs_bridge_enabled','on'),
-('showjs_b2_enabled','on'),
-('admin_auto_repair','on')
+('binance_account','')
 ON CONFLICT(key) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS admins (
@@ -153,24 +145,6 @@ CREATE TABLE IF NOT EXISTS admins (
     role TEXT NOT NULL DEFAULT 'admin',
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-
--- -------------------------
--- BACKBLAZE B2 STORAGE ACCOUNTS
--- -------------------------
-CREATE TABLE IF NOT EXISTS b2_storage_accounts (
-    account_id INT PRIMARY KEY CHECK (account_id BETWEEN 1 AND 10),
-    name TEXT NOT NULL,
-    region TEXT NOT NULL,
-    endpoint TEXT NOT NULL,
-    bucket TEXT NOT NULL,
-    key_id TEXT NOT NULL,
-    application_key TEXT NOT NULL,
-    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    is_target BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_b2_target ON b2_storage_accounts(is_target) WHERE is_target=TRUE;
 
 -- -------------------------
 -- FILES / MEDIA / MARKETPLACE
@@ -770,7 +744,7 @@ WHERE search_text IS NULL OR search_text='';
 
 -- ============================================================
 -- POINT ECONOMY (REAL / ATOMIC)
--- 1 point = Rp1.00 for purchases. Media delivery costs 1 point per media.
+-- 1 point = Rp1.00 for purchases. Media delivery costs 1.20 points.
 -- Uploading FREE media does NOT consume points. Reward: 50 media = +10, 100 media = +20.
 -- ============================================================
 ALTER TABLE users ADD COLUMN IF NOT EXISTS points NUMERIC(18,2) NOT NULL DEFAULT 0;

@@ -58,39 +58,3 @@ Untuk tutorial langkah demi langkah, buka `docs/TUTORIAL_LENGKAP_ID.md`.
 
 ## Loading UX
 Semua inline callback memakai middleware loading global. `/start` dan tombol reply-keyboard memakai message loading middleware. Lihat `LOADING_UX_FULL.md`.
-
-
-## B2 credential encryption
-
-For production, set a stable secret and keep it unchanged:
-
-```env
-B2_CREDENTIAL_KEY=<random-secret>
-```
-
-Existing installations remain backward-compatible with the legacy derived key
-when this variable is absent. New production deployments should use the
-explicit key.
-
-## Railway Environment — FINAL
-
-Untuk instalasi baru, gunakan hanya secret/infrastruktur utama berikut:
-
-```env
-BOT_TOKEN=...
-DATABASE_URL=...B2_CREDENTIAL_KEY=...
-ADMIN_IDS=...
-```
-
-
-`B2_CREDENTIAL_KEY` adalah secret stabil untuk enkripsi credential B2 yang dimasukkan dari Admin Panel. Jangan diganti setelah credential B2 tersimpan.
-
-Pengaturan operasional seperti **Force Sub**, B2 account, maintenance, scheduler, dan Telegram safety dikelola dari **Admin Panel**.
-
-Pastele tidak lagi membutuhkan:
-- `STORAGE_CHANNEL_ID`
-- `REVIEW_CHANNEL_ID`
-- `NOTIF_CHANNEL_ID`
-- channel review/notification/transaction URL lama
-
-Upload baru menggunakan **Telegram `file_id` + optional B2 backup**. Kegagalan B2 tidak menggagalkan upload.
