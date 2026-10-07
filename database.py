@@ -4,12 +4,10 @@ from pathlib import Path
 
 import asyncpg
 
-from config import DATABASE_URL, SHOWJS_DATABASE_URL
+from config import DATABASE_URL
 
 _pool = None
-_showjs_pool = None
 _lock = asyncio.Lock()
-_showjs_lock = asyncio.Lock()
 
 
 # ========================
@@ -69,48 +67,19 @@ async def get_pool():
     return _pool
 
 
-async def get_showjs_pool():
-    """Read-only connection pool for the legacy Showjs database."""
-    global _showjs_pool
-    if _showjs_pool is not None:
-        return _showjs_pool
-    if not SHOWJS_DATABASE_URL:
-        raise RuntimeError("SHOWJS_DATABASE_URL belum di-set")
-    async with _showjs_lock:
-        if _showjs_pool is not None:
-            return _showjs_pool
-        async def _showjs_connection_init(conn):
-            # Defense in depth: the bridge must never mutate Showjs.
-            await conn.execute("SET default_transaction_read_only = on")
-
-        _showjs_pool = await asyncpg.create_pool(
-            dsn=SHOWJS_DATABASE_URL,
-            min_size=1,
-            max_size=5,
-            command_timeout=60,
-            max_inactive_connection_lifetime=300,
-            statement_cache_size=0,
-            ssl="require",
-            init=_showjs_connection_init,
-        )
-        logging.info("✅ Showjs PostgreSQL connected (read-only bridge)")
-    return _showjs_pool
 
 # ========================
 # CLOSE DATABASE
 # ========================
 async def close_db():
-    global _pool, _showjs_pool
+    global _pool
 
     if _pool is not None:
         await _pool.close()
         _pool = None
         logging.info("🔌 Database closed")
 
-    if _showjs_pool is not None:
-        await _showjs_pool.close()
-        _showjs_pool = None
-        logging.info("🔌 Showjs database closed")
+
 
 # ========================
 # INIT DATABASE (AUTO FIX)
