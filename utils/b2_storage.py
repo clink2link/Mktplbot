@@ -338,15 +338,24 @@ async def download_file_from_b2(
         def _download_sync():
             client = _client(account)
 
-            # Do NOT call HeadObject here.
-            # Some B2 application keys can download an object but are not
-            # permitted to perform HeadObject. The download itself is the
-            # authoritative availability check.
-            client.download_file(
-                account["bucket"],
-                object_key,
-                destination,
+            # boto3 download_file() internally calls HeadObject first.
+            # Some B2 application keys can read objects but are not permitted
+            # to call HeadObject, so use GetObject directly instead.
+            response = client.get_object(
+                Bucket=account["bucket"],
+                Key=object_key,
             )
+
+            body = response["Body"]
+            try:
+                with open(destination, "wb") as fh:
+                    while True:
+                        chunk = body.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+            finally:
+                body.close()
 
         await asyncio.to_thread(_download_sync)
 
