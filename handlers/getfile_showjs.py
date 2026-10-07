@@ -23,7 +23,7 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 
 from database import get_showjs_pool, get_pool
 from utils.b2_storage import download_file_from_b2, get_b2_account
-from utils.points import unlock_free_code, unlock_paid_code, get_points, fmt_points
+from utils.points import unlock_free_code, unlock_paid_code_status, rollback_code_unlock, get_points, fmt_points
 from utils.user_lang import get_user_language
 
 router = Router()
@@ -69,21 +69,38 @@ def _localized(lang, id_text, en_text, zh_text):
 
 async def _find_showjs_code(code: str):
     pool = await get_showjs_pool()
-    return await pool.fetchrow(
+    row = await pool.fetchrow(
         """
         SELECT *
         FROM files
         WHERE LOWER(TRIM(code)) = LOWER(TRIM($1))
-          AND COALESCE(active, TRUE) = TRUE
         LIMIT 1
         """,
         code,
     )
+    if not row:
+        return None
+
+    # Showjs schema variants may or may not have an `active` column.
+    # Do not make the bridge fail merely because the legacy schema lacks it.
+    try:
+        active = row["active"]
+    except (KeyError, IndexError):
+        active = True
+    if active is False:
+        return None
+    return row
 
 
-async def _send_b2_media(message: Message, media_items: list[dict], title: str):
-    """Download each Showjs B2 object and send it through the Pastele bot."""
-    sent = 0
+async def _prepare_b2_media(media_items: list[dict]):
+    """Download every Showjs object before any points are charged.
+
+    This is intentionally all-or-nothing for the point gate: if even one
+    object cannot be downloaded, the caller receives no charge.
+    Returns (prepared_items, error_index). Each prepared item contains the
+    original metadata plus a temporary local path.
+    """
+    prepared = []
     for index, item in enumerate(media_items, 1):
         account_id = item.get("drive_account")
         object_key = (
@@ -92,11 +109,10 @@ async def _send_b2_media(message: Message, media_items: list[dict], title: str):
             or item.get("object_key")
         )
         if not account_id or not object_key:
-            logger.warning("SHOWJS MEDIA MISSING B2 REFERENCE | index=%s", index)
-            continue
+            return prepared, index
 
-        suffix = ""
         name = str(item.get("file_name") or item.get("name") or "media")
+        suffix = ""
         if "." in name:
             suffix = "." + name.rsplit(".", 1)[-1][:12]
 
@@ -109,52 +125,90 @@ async def _send_b2_media(message: Message, media_items: list[dict], title: str):
         tmp.close()
 
         try:
-            ok = await download_file_from_b2(int(account_id), object_key, path)
+            ok = await download_file_from_b2(
+                int(account_id), str(object_key), path
+            )
             if not ok:
-                continue
+                os.unlink(path)
+                return prepared, index
 
-            file_type = str(
-                item.get("type") or item.get("file_type") or "document"
-            ).lower()
-            caption = title if index == 1 else None
+            prepared.append({
+                "item": item,
+                "path": path,
+                "name": name,
+            })
+        except Exception:
+            logger.exception(
+                "SHOWJS B2 PREPARE FAILED | index=%s", index
+            )
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+            return prepared, index
+
+    return prepared, None
+
+
+async def _send_prepared_b2_media(message: Message, prepared: list[dict], title: str):
+    """Send already-downloaded Showjs media through the Pastele bot."""
+    sent_messages = []
+    for index, entry in enumerate(prepared, 1):
+        item = entry["item"]
+        path = entry["path"]
+        name = entry["name"]
+        file_type = str(
+            item.get("type") or item.get("file_type") or "document"
+        ).lower()
+        caption = title if index == 1 else None
+
+        try:
             inp = FSInputFile(path, filename=name)
-
             if file_type in {"photo", "image"}:
-                await message.answer_photo(inp, caption=caption)
+                sent_msg = await message.answer_photo(inp, caption=caption)
             elif file_type == "video":
-                await message.answer_video(inp, caption=caption)
+                sent_msg = await message.answer_video(inp, caption=caption)
             elif file_type == "audio":
-                await message.answer_audio(inp, caption=caption)
+                sent_msg = await message.answer_audio(inp, caption=caption)
             elif file_type == "voice":
-                await message.answer_voice(inp, caption=caption)
+                sent_msg = await message.answer_voice(inp, caption=caption)
             elif file_type in {"animation", "gif"}:
-                await message.answer_animation(inp, caption=caption)
+                sent_msg = await message.answer_animation(inp, caption=caption)
             else:
-                await message.answer_document(inp, caption=caption)
-
-            sent += 1
+                sent_msg = await message.answer_document(inp, caption=caption)
+            sent_messages.append(sent_msg)
         except TelegramRetryAfter as exc:
             await asyncio.sleep(max(1.0, float(exc.retry_after) + 0.5))
             try:
                 inp = FSInputFile(path, filename=name)
                 if file_type == "video":
-                    await message.answer_video(inp, caption=caption)
+                    sent_msg = await message.answer_video(inp, caption=caption)
                 elif file_type in {"photo", "image"}:
-                    await message.answer_photo(inp, caption=caption)
+                    sent_msg = await message.answer_photo(inp, caption=caption)
+                elif file_type == "audio":
+                    sent_msg = await message.answer_audio(inp, caption=caption)
+                elif file_type == "voice":
+                    sent_msg = await message.answer_voice(inp, caption=caption)
+                elif file_type in {"animation", "gif"}:
+                    sent_msg = await message.answer_animation(inp, caption=caption)
                 else:
-                    await message.answer_document(inp, caption=caption)
-                sent += 1
+                    sent_msg = await message.answer_document(inp, caption=caption)
+                sent_messages.append(sent_msg)
             except Exception:
-                logger.exception("SHOWJS MEDIA RETRY FAILED | index=%s", index)
+                logger.exception(
+                    "SHOWJS MEDIA RETRY FAILED | index=%s", index
+                )
         except Exception:
-            logger.exception("SHOWJS MEDIA SEND FAILED | index=%s", index)
+            logger.exception(
+                "SHOWJS MEDIA SEND FAILED | index=%s", index
+            )
         finally:
             try:
                 os.unlink(path)
             except Exception:
                 pass
 
-    return sent
+    return sent_messages
 
 
 async def process_showjs_code(message: Message, code: str):
@@ -190,8 +244,10 @@ async def process_showjs_code(message: Message, code: str):
             return await message.answer("❌ Media pada CODE Showjs kosong.")
 
         title = str(_field(row, "title", "Showjs Media") or "Showjs Media")
-        # Validate every B2 mapping before charging points. This prevents a
-        # misconfigured Admin -> B2 account from consuming user points.
+        # Validate every B2 mapping and the admin switch BEFORE charging
+        # points. The complete media batch is downloaded first as well.
+        # Therefore a missing B2 object, bad credentials, or B2 outage can
+        # never consume the user's points.
         b2_refs = []
         for idx, item in enumerate(media, 1):
             account_id = item.get("drive_account")
@@ -204,31 +260,63 @@ async def process_showjs_code(message: Message, code: str):
                 return await message.answer(
                     f"❌ Media #{idx} tidak memiliki referensi B2 yang valid."
                 )
-            account = await get_b2_account(int(account_id))
+            try:
+                account_id = int(account_id)
+            except (TypeError, ValueError):
+                return await message.answer(
+                    f"❌ Media #{idx} memiliki B2 account ID yang tidak valid."
+                )
+            account = await get_b2_account(account_id)
             if not account:
                 return await message.answer(
-                    f"❌ B2 #{int(account_id)} belum dikonfigurasi di panel admin."
+                    f"❌ B2 #{account_id} belum dikonfigurasi di panel admin."
                 )
-            b2_refs.append((int(account_id), str(object_key)))
+            b2_refs.append((account_id, str(object_key)))
+
+        pool = await get_pool()
+        b2_enabled = await pool.fetchval(
+            "SELECT value FROM settings WHERE key=$1",
+            "showjs_b2_enabled",
+        )
+        if str(b2_enabled or "on").lower() not in {"on", "1", "true", "yes"}:
+            return await message.answer(
+                "⛔ Storage B2 Showjs sedang dinonaktifkan admin."
+            )
+
+        # Download the complete batch before touching the point balance.
+        prepared, failed_index = await _prepare_b2_media(media)
+        if failed_index is not None or len(prepared) != len(media):
+            for entry in prepared:
+                try:
+                    os.unlink(entry["path"])
+                except Exception:
+                    pass
+            return await message.answer(
+                f"❌ Media Showjs #{failed_index or '?'} gagal diambil dari B2. "
+                "Poin kamu tidak dipotong. Silakan coba lagi nanti."
+            )
 
         is_paid = bool(_field(row, "is_paid", False))
         price = int(_field(row, "price", 0) or 0)
         owner_id = int(_field(row, "owner_id", 0) or 0)
+        charged_this_request = False
 
         # Existing Pastele point economy is the ONLY access gate.
         # The Showjs database is never modified by this handler.
-        pool = await get_pool()
         if owner_id and owner_id == user_id:
             allowed = True
-            reason = "owner"
         elif is_paid:
-            # A successful point unlock is stored in Pastele's
-            # point_code_unlocks table, so the same CODE is not charged twice.
-            allowed, balance = await unlock_paid_code(
+            # The charged flag comes from the same DB transaction that
+            # performs the unlock. Never infer it with a separate pre-check.
+            allowed, balance, charged_this_request = await unlock_paid_code_status(
                 pool, user_id, code, price
             )
-            reason = "points" if allowed else "points_required"
             if not allowed:
+                for entry in prepared:
+                    try:
+                        os.unlink(entry["path"])
+                    except Exception:
+                        pass
                 lang = await get_user_language(user_id)
                 return await message.answer(
                     _localized(
@@ -243,8 +331,13 @@ async def process_showjs_code(message: Message, code: str):
             allowed, balance, charged = await unlock_free_code(
                 pool, user_id, code, len(media)
             )
-            reason = "points" if allowed else "points_required"
+            charged_this_request = charged > 0
             if not allowed:
+                for entry in prepared:
+                    try:
+                        os.unlink(entry["path"])
+                    except Exception:
+                        pass
                 lang = await get_user_language(user_id)
                 return await message.answer(
                     _localized(
@@ -260,21 +353,40 @@ async def process_showjs_code(message: Message, code: str):
         status = await message.answer(
             _localized(
                 lang,
-                f"⏳ Mengambil <b>{len(media)}</b> media dari storage Showjs...",
-                f"⏳ Fetching <b>{len(media)}</b> media from Showjs storage...",
-                f"⏳ 正在从 Showjs 存储获取 <b>{len(media)}</b> 个媒体...",
+                f"⏳ Mengirim <b>{len(media)}</b> media dari storage Showjs...",
+                f"⏳ Sending <b>{len(media)}</b> media from Showjs storage...",
+                f"⏳ 正在发送 <b>{len(media)}</b> 个 Showjs 媒体...",
             ),
             parse_mode="HTML",
         )
 
-        b2_enabled = await pool.fetchval(
-            "SELECT value FROM settings WHERE key=$1",
-            "showjs_b2_enabled",
-        )
-        if str(b2_enabled or "on").lower() not in {"on", "1", "true", "yes"}:
-            return await status.edit_text("⛔ Storage B2 Showjs sedang dinonaktifkan admin.", parse_mode="HTML")
+        sent_messages = await _send_prepared_b2_media(message, prepared, title)
+        sent = len(sent_messages)
 
-        sent = await _send_b2_media(message, media, title)
+        if sent != len(media) and charged_this_request:
+            # Remove any partially delivered messages before refunding. This
+            # prevents a Telegram delivery failure from becoming a free unlock.
+            for sent_message in sent_messages:
+                try:
+                    await sent_message.delete()
+                except Exception:
+                    pass
+            rolled_back, refunded = await rollback_code_unlock(pool, user_id, code)
+            if rolled_back:
+                lang = await get_user_language(user_id)
+                try:
+                    await status.edit_text(
+                        _localized(
+                            lang,
+                            f"❌ Pengiriman gagal. <b>{fmt_points(refunded)} poin</b> dikembalikan. Tidak ada poin yang hilang.",
+                            f"❌ Delivery failed. <b>{fmt_points(refunded)} points</b> were refunded. No points were lost.",
+                            f"❌ 发送失败，已退还 <b>{fmt_points(refunded)} 积分</b>。积分未损失。",
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                return
 
         try:
             await status.edit_text(
@@ -288,6 +400,7 @@ async def process_showjs_code(message: Message, code: str):
             )
         except Exception:
             pass
+
 
 
 @router.message(
