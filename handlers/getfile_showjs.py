@@ -217,7 +217,18 @@ async def _send_prepared_b2_media(message: Message, prepared: list[dict], title:
     return sent_messages
 
 
-async def process_showjs_code(message: Message, code: str):
+
+async def _delete_showjs_notification(notification_message: Message | None):
+    """Remove the Get File Jsshow notification when its B2 media is unavailable."""
+    if not notification_message:
+        return
+    try:
+        await notification_message.delete()
+    except Exception:
+        logger.debug("SHOWJS NOTIFICATION DELETE FAILED", exc_info=True)
+
+
+async def process_showjs_code(message: Message, code: str, notification_message: Message | None = None):
     user_id = int(message.from_user.id)
     code = str(code or "").strip()
 
@@ -263,19 +274,25 @@ async def process_showjs_code(message: Message, code: str):
                 or item.get("object_key")
             )
             if not account_id or not object_key:
+                await _delete_showjs_notification(notification_message)
                 return await message.answer(
-                    f"❌ Media #{idx} tidak memiliki referensi B2 yang valid."
+                    f"❌ Media #{idx} tidak memiliki referensi B2 yang valid. "
+                    "Notifikasi Get File Jsshow telah dihapus."
                 )
             try:
                 account_id = int(account_id)
             except (TypeError, ValueError):
+                await _delete_showjs_notification(notification_message)
                 return await message.answer(
-                    f"❌ Media #{idx} memiliki B2 account ID yang tidak valid."
+                    f"❌ Media #{idx} memiliki B2 account ID yang tidak valid. "
+                    "Notifikasi Get File Jsshow telah dihapus."
                 )
             account = await get_b2_account(account_id)
             if not account:
+                await _delete_showjs_notification(notification_message)
                 return await message.answer(
-                    f"❌ B2 #{account_id} belum dikonfigurasi di panel admin."
+                    f"❌ B2 #{account_id} belum dikonfigurasi di panel admin. "
+                    "Notifikasi Get File Jsshow telah dihapus."
                 )
             b2_refs.append((account_id, str(object_key)))
 
@@ -285,8 +302,10 @@ async def process_showjs_code(message: Message, code: str):
             "showjs_b2_enabled",
         )
         if str(b2_enabled or "on").lower() not in {"on", "1", "true", "yes"}:
+            await _delete_showjs_notification(notification_message)
             return await message.answer(
-                "⛔ Storage B2 Showjs sedang dinonaktifkan admin."
+                "⛔ Storage B2 Showjs sedang dinonaktifkan admin. "
+                "Notifikasi Get File Jsshow telah dihapus."
             )
 
         # Download the complete batch before touching the point balance.
@@ -297,9 +316,11 @@ async def process_showjs_code(message: Message, code: str):
                     os.unlink(entry["path"])
                 except Exception:
                     pass
+            await _delete_showjs_notification(notification_message)
             return await message.answer(
-                f"❌ Media Showjs #{failed_index or '?'} gagal diambil dari B2. "
-                "Poin kamu tidak dipotong. Silakan coba lagi nanti."
+                f"❌ Media Showjs #{failed_index or '?'} tidak tersedia di B2. "
+                "Notifikasi Get File Jsshow telah dihapus. "
+                "Poin kamu tidak dipotong."
             )
 
         is_paid = bool(_field(row, "is_paid", False))
@@ -413,7 +434,11 @@ async def process_showjs_code(message: Message, code: str):
 async def open_showjs_from_notification(call: CallbackQuery):
     code = call.data.split(":", 1)[1].strip()
     await call.answer("⏳")
-    return await process_showjs_code(call.message, code)
+    return await process_showjs_code(
+        call.message,
+        code,
+        notification_message=call.message,
+    )
 
 
 @router.message(
