@@ -15,6 +15,7 @@ import os
 import re
 import tempfile
 from contextlib import asynccontextmanager
+from typing import Any, Optional
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
@@ -41,6 +42,37 @@ SHOWJS_CODE_EXACT_RE = re.compile(
 )
 
 _locks = {}
+
+
+def _showjs_b2_account_map() -> dict[int, int]:
+    """Map Showjs drive_account IDs to Pastele B2 account IDs.
+
+    Legacy Showjs stores its own B2 account IDs. Pastele has a separate
+    b2_storage_accounts table, so the IDs must not be assumed identical.
+    Default mapping is Showjs account 1 -> Pastele account 3, matching the
+    current deployment. Additional mappings can be supplied with
+    SHOWJS_B2_ACCOUNT_MAP=1:3,2:4.
+    """
+    raw = os.getenv("SHOWJS_B2_ACCOUNT_MAP", "1:3")
+    mapping: dict[int, int] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        left, right = part.split(":", 1)
+        try:
+            mapping[int(left.strip())] = int(right.strip())
+        except (TypeError, ValueError):
+            continue
+    return mapping
+
+
+def _resolve_pastele_b2_account(showjs_drive_account: Any) -> Optional[int]:
+    try:
+        source_id = int(showjs_drive_account)
+    except (TypeError, ValueError):
+        return None
+    return _showjs_b2_account_map().get(source_id)
 
 
 def _lock(user_id: int):
@@ -108,22 +140,22 @@ async def _prepare_b2_media(media_items: list[dict]):
     prepared = []
     missing = []
     for index, item in enumerate(media_items, 1):
-        account_id = item.get("drive_account")
+        showjs_account_id = item.get("drive_account")
+        account_id = _resolve_pastele_b2_account(showjs_account_id)
         object_key = (
             item.get("drive_file_id")
             or item.get("b2_object_key")
             or item.get("object_key")
         )
-        try:
-            account_id = int(account_id) if account_id is not None else None
-        except (TypeError, ValueError):
-            account_id = None
 
         if not account_id or not object_key:
+            logger.warning(
+                "SHOWJS B2 MAPPING MISSING | media=%s | showjs_drive_account=%s | mapped_pastele_account=%s | key=%s",
+                index, showjs_account_id, account_id, bool(object_key),
+            )
             missing.append(index)
             continue
 
-        # The mapping is per-media: drive_account N means Pastele B2 account N.
         account = await get_b2_account(account_id)
         if not account:
             missing.append(index)
