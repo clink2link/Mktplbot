@@ -29,8 +29,14 @@ from utils.user_lang import get_user_language
 router = Router()
 logger = logging.getLogger(__name__)
 
+# Showjs CODE: prefix + variable alphanumeric media id + _version marker.
+# Example: Jsshowbot_77X4xx727x3_0p90v0d
 SHOWJS_CODE_RE = re.compile(
-    r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]+_[0-9]+p[0-9]+v[0-9]+d(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+SHOWJS_CODE_EXACT_RE = re.compile(
+    r"^\s*Jsshowbot_[A-Za-z0-9]+_[0-9]+p[0-9]+v[0-9]+d\s*$",
     re.IGNORECASE,
 )
 
@@ -403,8 +409,15 @@ async def process_showjs_code(message: Message, code: str):
 
 
 
+@router.callback_query(F.data.startswith("open_showjs:"))
+async def open_showjs_from_notification(call: CallbackQuery):
+    code = call.data.split(":", 1)[1].strip()
+    await call.answer("⏳")
+    return await process_showjs_code(call.message, code)
+
+
 @router.message(
-    F.text.regexp(SHOWJS_CODE_RE)
+    F.text.regexp(SHOWJS_CODE_EXACT_RE)
 )
 async def showjs_code_global(message: Message, state: FSMContext):
     text = (message.text or "").strip()

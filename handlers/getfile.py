@@ -176,6 +176,14 @@ CODE_REGEX = re.compile(
     rf"(?<![A-Za-z0-9]){re.escape(CODE_PREFIX)}[A-Za-z0-9]{{{CODE_SUFFIX_LENGTH}}}(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+CODE_EXACT_RE = re.compile(
+    rf"^\\s*{re.escape(CODE_PREFIX)}[A-Za-z0-9]{{{CODE_SUFFIX_LENGTH}}}\\s*$",
+    re.IGNORECASE,
+)
+SHOWJS_CODE_INLINE_RE = re.compile(
+    r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]+_[0-9]+p[0-9]+v[0-9]+d(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
 
 def normalize_code(code: str) -> str:
@@ -784,13 +792,7 @@ async def process_code(
 # A CODE can arrive from anywhere in the chat, not only after pressing
 # Get File. It always enters the same process_code() pipeline.
 @router.message(
-    F.text.regexp(CODE_REGEX)
-    | F.text.regexp(
-        re.compile(
-            r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])",
-            re.IGNORECASE,
-        )
-    )
+    F.text.regexp(CODE_EXACT_RE)
 )
 async def receive_code_global(
     message: Message,
@@ -811,13 +813,7 @@ async def receive_code_global(
     if not text:
         return
 
-    patterns = [
-        CODE_REGEX,
-        re.compile(
-            r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])",
-            re.IGNORECASE,
-        ),
-    ]
+    patterns = [CODE_EXACT_RE]
 
     match = None
     for pattern in patterns:
@@ -884,7 +880,7 @@ async def receive_code(
 
         match = CODE_REGEX.search(text)
         if not match:
-            match = re.search(r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])", text, re.IGNORECASE)
+            match = SHOWJS_CODE_INLINE_RE.search(text)
 
         # ====================================================
         # INVALID CODE
