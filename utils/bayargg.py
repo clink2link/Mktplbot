@@ -34,50 +34,6 @@ def clean_customer_name(name: str) -> str:
 class BayarGG:
 
     @staticmethod
-    async def get_payment_methods(self):
-        """Return BayarGG payment methods and availability for this API key."""
-        headers = {
-            "X-API-Key": BAYARGG_API_KEY,
-            "Content-Type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{BASE_URL}/get-payment-methods.php",
-                headers=headers,
-            )
-        logger.info(f"PAYMENT METHODS STATUS: {response.status_code}")
-        logger.info(f"PAYMENT METHODS BODY: {response.text}")
-        response.raise_for_status()
-        raw = response.json()
-        if not raw.get("success"):
-            raise Exception(raw.get("error") or "Gagal mengambil metode pembayaran BayarGG")
-        data = raw.get("data") or {}
-        methods = data.get("payment_methods") or []
-        return {
-            "methods": methods,
-            "user_status": data.get("user_status") or {},
-            "feature_status": data.get("feature_status") or {},
-        }
-
-    async def choose_payment_method(self, preferred=None):
-        """Choose the first usable QR/payment method exposed by BayarGG."""
-        preferred = preferred or [
-            "qris",
-            "qris_bayar_gg",
-            "gopay_qris",
-            "qris_livin",
-            "qris_user",
-            "ovo",
-        ]
-        info = await self.get_payment_methods()
-        methods = {str(m.get("id")): m for m in info["methods"] if m.get("id")}
-        for method_id in preferred:
-            item = methods.get(method_id)
-            if item and item.get("available") is True and item.get("enabled", True) is not False:
-                logger.info(f"BAYARGG SELECTED PAYMENT METHOD: {method_id}")
-                return method_id
-        raise Exception("Tidak ada metode pembayaran BayarGG yang tersedia untuk akun ini.")
-
     async def create_payment(
         amount: int,
         description: str,
@@ -86,7 +42,7 @@ class BayarGG:
         redirect_url: str | None = None,
         customer_name: str | None = None,
         customer_phone: str | None = None,
-        payment_method: str | None = None,
+        payment_method: str = "qris",
     ):
 
         headers = {
@@ -101,9 +57,6 @@ class BayarGG:
         logger.info(
             f"HEADERS: {headers.keys()}"
         )
-
-        if not payment_method:
-            payment_method = await self.choose_payment_method()
 
         payload = {
             "amount": amount,

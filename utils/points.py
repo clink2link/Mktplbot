@@ -65,18 +65,16 @@ async def unlock_free_code(pool, user_id: int, code: str, media_count: int):
         return True, await get_points(pool, uid), Decimal('0')
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Lock the user row first. This serializes concurrent unlocks even
-            # when the unique (user_id, lower(code)) row does not exist yet.
-            row = await conn.fetchrow("SELECT points FROM users WHERE user_id=$1 FOR UPDATE", uid)
-            if not row:
-                return False, Decimal('0'), Decimal(count)
             existing = await conn.fetchval(
-                "SELECT 1 FROM point_code_unlocks WHERE user_id=$1 AND LOWER(code)=LOWER($2) LIMIT 1",
+                "SELECT 1 FROM point_code_unlocks WHERE user_id=$1 AND LOWER(code)=LOWER($2) FOR UPDATE",
                 uid, normalized,
             )
             if existing:
-                bal = Decimal(str(row['points'] or 0))
-                return True, bal, Decimal('0')
+                bal = await conn.fetchval("SELECT points FROM users WHERE user_id=$1", uid)
+                return True, Decimal(str(bal or 0)), Decimal('0')
+            row = await conn.fetchrow("SELECT points FROM users WHERE user_id=$1 FOR UPDATE", uid)
+            if not row:
+                return False, Decimal('0'), Decimal(count)
             bal = Decimal(str(row['points'] or 0))
             cost = (MEDIA_COST * Decimal(count)).quantize(Decimal('0.01'))
             if bal < cost:
@@ -98,116 +96,23 @@ async def unlock_free_code(pool, user_id: int, code: str, media_count: int):
             )
             return True, new, cost
 
-async def unlock_paid_code_status(pool, user_id:int, code:str, price:int):
-    """Atomically unlock a paid code.
-
-    Returns ``(ok, balance, charged_this_request)``.  The user row is locked
-    for the complete transaction, so concurrent requests cannot both charge
-    the same code.  The charged flag is decided inside that same transaction;
-    callers must never perform a separate pre-check to infer it.
-    """
-    uid = int(user_id)
-    normalized = str(code or "").strip()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                "SELECT points FROM users WHERE user_id=$1 FOR UPDATE", uid
-            )
-            if not row:
-                return False, Decimal("0"), False
-
-            existing = await conn.fetchval(
-                "SELECT 1 FROM point_code_unlocks "
-                "WHERE user_id=$1 AND LOWER(code)=LOWER($2) LIMIT 1",
-                uid, normalized,
-            )
-            balance = Decimal(str(row["points"] or 0))
-            if existing:
-                return True, balance, False
-
-            cost = Decimal(str(price or 0))
-            if cost < 0:
-                cost = Decimal("0")
-            if balance < cost:
-                return False, balance, False
-
-            new_balance = balance - cost
-            await conn.execute(
-                "UPDATE users SET points=$1, updated_at=NOW() WHERE user_id=$2",
-                new_balance, uid,
-            )
-            ref = f"paid_unlock:{uid}:{normalized.lower()}"
-            await conn.execute(
-                """INSERT INTO point_code_unlocks(user_id,code,amount)
-                   VALUES($1,$2,$3) ON CONFLICT DO NOTHING""",
-                uid, normalized, cost,
-            )
-            await conn.execute(
-                """INSERT INTO point_transactions(
-                       user_id,amount,balance_after,type,reference,description
-                   )
-                   VALUES($1,$2,$3,'paid_unlock',$4,$5)
-                   ON CONFLICT(reference) DO NOTHING""",
-                uid, -cost, new_balance, ref,
-                f"Unlock paid code {normalized}",
-            )
-            return True, new_balance, True
-
-
 async def unlock_paid_code(pool,user_id:int,code:str,price:int):
-    """Backward-compatible wrapper returning the historic (ok, balance)."""
-    ok, balance, _charged = await unlock_paid_code_status(
-        pool, user_id, code, price
-    )
-    return ok, balance
-
-async def rollback_code_unlock(pool, user_id: int, code: str):
-    """Atomically undo a newly-created code unlock.
-
-    Used when media was prepared successfully but Telegram delivery failed.
-    If the code was already unlocked before this request, nothing is changed.
-    Returns (rolled_back, amount).
-    """
-    uid = int(user_id)
-    normalized = str(code or '').strip()
-    if not normalized:
-        return False, Decimal('0')
+    """Charge paid-code point cost exactly once. Returns (ok,balance)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow(
-                "SELECT points FROM users WHERE user_id=$1 FOR UPDATE", uid
-            )
-            if not row:
-                return False, Decimal('0')
-            unlock = await conn.fetchrow(
-                "SELECT amount FROM point_code_unlocks WHERE user_id=$1 AND LOWER(code)=LOWER($2) LIMIT 1",
-                uid, normalized,
-            )
-            if not unlock:
-                return False, Decimal('0')
-            amount = Decimal(str(unlock['amount'] or 0))
-            if amount <= 0:
-                return False, Decimal('0')
-            deleted = await conn.execute(
-                "DELETE FROM point_code_unlocks WHERE user_id=$1 AND LOWER(code)=LOWER($2)",
-                uid, normalized,
-            )
-            if not deleted.endswith('1'):
-                return False, Decimal('0')
-            new_balance = Decimal(str(row['points'] or 0)) + amount
-            await conn.execute(
-                "UPDATE users SET points=$1, updated_at=NOW() WHERE user_id=$2",
-                new_balance, uid,
-            )
-            ref = f"unlock_rollback:{uid}:{normalized.lower()}"
-            await conn.execute(
-                """INSERT INTO point_transactions(user_id,amount,balance_after,type,reference,description)
-                   VALUES($1,$2,$3,'media_refund',$4,$5) ON CONFLICT(reference) DO NOTHING""",
-                uid, amount, new_balance, ref,
-                f"Refund failed media delivery for {normalized}",
-            )
-            return True, amount
-
+            existing=await conn.fetchval("SELECT 1 FROM point_code_unlocks WHERE user_id=$1 AND LOWER(code)=LOWER($2) FOR UPDATE",int(user_id),code)
+            if existing:
+                bal=await conn.fetchval("SELECT points FROM users WHERE user_id=$1",int(user_id)); return True,Decimal(str(bal or 0))
+            row=await conn.fetchrow("SELECT points FROM users WHERE user_id=$1 FOR UPDATE",int(user_id))
+            if not row: return False,Decimal("0")
+            bal=Decimal(str(row['points'] or 0)); cost=Decimal(price)
+            if bal < cost: return False,bal
+            new=bal-cost
+            await conn.execute("UPDATE users SET points=$1,updated_at=NOW() WHERE user_id=$2",new,int(user_id))
+            ref=f"paid_unlock:{user_id}:{code.lower()}"
+            await conn.execute("INSERT INTO point_code_unlocks(user_id,code,amount) VALUES($1,$2,$3)",int(user_id),code,cost)
+            await conn.execute("INSERT INTO point_transactions(user_id,amount,balance_after,type,reference,description) VALUES($1,$2,$3,'paid_unlock',$4,$5) ON CONFLICT(reference) DO NOTHING",int(user_id),-cost,new,ref,f"Unlock paid code {code}")
+            return True,new
 
 async def charge_upload(pool,user_id:int,count:int,code:str):
     """Upload reward only: no upload cost.
