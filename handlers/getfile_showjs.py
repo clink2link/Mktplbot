@@ -99,14 +99,14 @@ async def _find_showjs_code(code: str):
 
 
 async def _prepare_b2_media(media_items: list[dict]):
-    """Download every Showjs object before any points are charged.
+    """Prepare every Showjs media that is actually available in B2.
 
-    This is intentionally all-or-nothing for the point gate: if even one
-    object cannot be downloaded, the caller receives no charge.
-    Returns (prepared_items, error_index). Each prepared item contains the
-    original metadata plus a temporary local path.
+    Legacy Showjs CODEs can contain a mixture of B2-backed and unavailable
+    media. Missing objects are skipped instead of blocking the whole CODE.
+    Returns (prepared_items, missing_indexes).
     """
     prepared = []
+    missing = []
     for index, item in enumerate(media_items, 1):
         account_id = item.get("drive_account")
         object_key = (
@@ -114,8 +114,20 @@ async def _prepare_b2_media(media_items: list[dict]):
             or item.get("b2_object_key")
             or item.get("object_key")
         )
+        try:
+            account_id = int(account_id) if account_id is not None else None
+        except (TypeError, ValueError):
+            account_id = None
+
         if not account_id or not object_key:
-            return prepared, index
+            missing.append(index)
+            continue
+
+        # The mapping is per-media: drive_account N means Pastele B2 account N.
+        account = await get_b2_account(account_id)
+        if not account:
+            missing.append(index)
+            continue
 
         name = str(item.get("file_name") or item.get("name") or "media")
         suffix = ""
@@ -123,37 +135,36 @@ async def _prepare_b2_media(media_items: list[dict]):
             suffix = "." + name.rsplit(".", 1)[-1][:12]
 
         tmp = tempfile.NamedTemporaryFile(
-            prefix="showjs_b2_",
-            suffix=suffix,
-            delete=False,
+            prefix="showjs_b2_", suffix=suffix, delete=False
         )
         path = tmp.name
         tmp.close()
 
         try:
-            ok = await download_file_from_b2(
-                int(account_id), str(object_key), path
-            )
+            ok = await download_file_from_b2(account_id, str(object_key), path)
             if not ok:
-                os.unlink(path)
-                return prepared, index
+                missing.append(index)
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+                continue
 
             prepared.append({
                 "item": item,
                 "path": path,
                 "name": name,
+                "original_index": index,
             })
         except Exception:
-            logger.exception(
-                "SHOWJS B2 PREPARE FAILED | index=%s", index
-            )
+            logger.exception("SHOWJS B2 PREPARE FAILED | index=%s", index)
+            missing.append(index)
             try:
                 os.unlink(path)
             except Exception:
                 pass
-            return prepared, index
 
-    return prepared, None
+    return prepared, missing
 
 
 async def _send_prepared_b2_media(message: Message, prepared: list[dict], title: str):
@@ -261,40 +272,6 @@ async def process_showjs_code(message: Message, code: str, notification_message:
             return await message.answer("❌ Media pada CODE Showjs kosong.")
 
         title = str(_field(row, "title", "Showjs Media") or "Showjs Media")
-        # Validate every B2 mapping and the admin switch BEFORE charging
-        # points. The complete media batch is downloaded first as well.
-        # Therefore a missing B2 object, bad credentials, or B2 outage can
-        # never consume the user's points.
-        b2_refs = []
-        for idx, item in enumerate(media, 1):
-            account_id = item.get("drive_account")
-            object_key = (
-                item.get("drive_file_id")
-                or item.get("b2_object_key")
-                or item.get("object_key")
-            )
-            if not account_id or not object_key:
-                await _delete_showjs_notification(notification_message)
-                return await message.answer(
-                    f"❌ Media #{idx} tidak memiliki referensi B2 yang valid. "
-                    "Notifikasi Get File Jsshow telah dihapus."
-                )
-            try:
-                account_id = int(account_id)
-            except (TypeError, ValueError):
-                await _delete_showjs_notification(notification_message)
-                return await message.answer(
-                    f"❌ Media #{idx} memiliki B2 account ID yang tidak valid. "
-                    "Notifikasi Get File Jsshow telah dihapus."
-                )
-            account = await get_b2_account(account_id)
-            if not account:
-                await _delete_showjs_notification(notification_message)
-                return await message.answer(
-                    f"❌ B2 #{account_id} belum dikonfigurasi di panel admin. "
-                    "Notifikasi Get File Jsshow telah dihapus."
-                )
-            b2_refs.append((account_id, str(object_key)))
 
         pool = await get_pool()
         b2_enabled = await pool.fetchval(
@@ -308,20 +285,20 @@ async def process_showjs_code(message: Message, code: str, notification_message:
                 "Notifikasi Get File Jsshow telah dihapus."
             )
 
-        # Download the complete batch before touching the point balance.
-        prepared, failed_index = await _prepare_b2_media(media)
-        if failed_index is not None or len(prepared) != len(media):
-            for entry in prepared:
-                try:
-                    os.unlink(entry["path"])
-                except Exception:
-                    pass
+        # Prepare only media that really exists in B2. Missing media do not
+        # block valid media from the same CODE. The notification is removed
+        # when anything is unavailable, so the stale Get File button is gone.
+        prepared, missing_indexes = await _prepare_b2_media(media)
+        if missing_indexes:
             await _delete_showjs_notification(notification_message)
+
+        if not prepared:
             return await message.answer(
-                f"❌ Media Showjs #{failed_index or '?'} tidak tersedia di B2. "
-                "Notifikasi Get File Jsshow telah dihapus. "
-                "Poin kamu tidak dipotong."
+                "❌ Tidak ada media Showjs yang tersedia di B2. "
+                "Notifikasi Get File Jsshow telah dihapus. Poin tidak dipotong."
             )
+
+        available_media_count = len(prepared)
 
         is_paid = bool(_field(row, "is_paid", False))
         price = int(_field(row, "price", 0) or 0)
@@ -356,7 +333,7 @@ async def process_showjs_code(message: Message, code: str, notification_message:
                 )
         else:
             allowed, balance, charged = await unlock_free_code(
-                pool, user_id, code, len(media)
+                pool, user_id, code, available_media_count
             )
             charged_this_request = charged > 0
             if not allowed:
@@ -369,7 +346,7 @@ async def process_showjs_code(message: Message, code: str, notification_message:
                 return await message.answer(
                     _localized(
                         lang,
-                        f"⭐ <b>POIN TIDAK CUKUP</b>\n\nMedia: <b>{len(media)}</b>\nDibutuhkan: <b>{fmt_points(charged)} poin</b>\nPoin kamu: <b>{fmt_points(balance)}</b>.",
+                        f"⭐ <b>POIN TIDAK CUKUP</b>\n\nMedia tersedia: <b>{available_media_count}</b>\nDibutuhkan: <b>{fmt_points(charged)} poin</b>\nPoin kamu: <b>{fmt_points(balance)}</b>.",
                         f"⭐ <b>NOT ENOUGH POINTS</b>\n\nMedia: <b>{len(media)}</b>\nRequired: <b>{fmt_points(charged)} points</b>\nYour points: <b>{fmt_points(balance)}</b>.",
                         f"⭐ <b>积分不足</b>\n\n媒体：<b>{len(media)}</b>\n需要：<b>{fmt_points(charged)} 积分</b>.",
                     ),
@@ -380,9 +357,9 @@ async def process_showjs_code(message: Message, code: str, notification_message:
         status = await message.answer(
             _localized(
                 lang,
-                f"⏳ Mengirim <b>{len(media)}</b> media dari storage Showjs...",
-                f"⏳ Sending <b>{len(media)}</b> media from Showjs storage...",
-                f"⏳ 正在发送 <b>{len(media)}</b> 个 Showjs 媒体...",
+                f"⏳ Mengirim <b>{available_media_count}</b> media dari storage Showjs...",
+                f"⏳ Sending <b>{available_media_count}</b> media from Showjs storage...",
+                f"⏳ 正在发送 <b>{available_media_count}</b> 个 Showjs 媒体...",
             ),
             parse_mode="HTML",
         )
@@ -390,7 +367,7 @@ async def process_showjs_code(message: Message, code: str, notification_message:
         sent_messages = await _send_prepared_b2_media(message, prepared, title)
         sent = len(sent_messages)
 
-        if sent != len(media) and charged_this_request:
+        if sent != available_media_count and charged_this_request:
             # Remove any partially delivered messages before refunding. This
             # prevents a Telegram delivery failure from becoming a free unlock.
             for sent_message in sent_messages:
@@ -414,6 +391,11 @@ async def process_showjs_code(message: Message, code: str, notification_message:
                 except Exception:
                     pass
                 return
+
+        missing_note = ""
+        if missing_indexes:
+            nums = ", ".join(str(i) for i in missing_indexes)
+            missing_note = f"\n⚠️ Media tidak tersedia di B2: #{nums}"
 
         try:
             await status.edit_text(
