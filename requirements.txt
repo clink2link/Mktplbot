@@ -19,3 +19,4 @@ orjson==3.11.2
 aiofiles==24.1.0
 
 boto3==1.40.45
+cryptography==45.0.7

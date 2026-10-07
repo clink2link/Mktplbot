@@ -58,3 +58,16 @@ Untuk tutorial langkah demi langkah, buka `docs/TUTORIAL_LENGKAP_ID.md`.
 
 ## Loading UX
 Semua inline callback memakai middleware loading global. `/start` dan tombol reply-keyboard memakai message loading middleware. Lihat `LOADING_UX_FULL.md`.
+
+
+## B2 credential encryption
+
+For production, set a stable secret and keep it unchanged:
+
+```env
+B2_CREDENTIAL_KEY=<random-secret>
+```
+
+Existing installations remain backward-compatible with the legacy derived key
+when this variable is absent. New production deployments should use the
+explicit key.

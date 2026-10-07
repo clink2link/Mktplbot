@@ -766,7 +766,7 @@ WHERE search_text IS NULL OR search_text='';
 
 -- ============================================================
 -- POINT ECONOMY (REAL / ATOMIC)
--- 1 point = Rp1.00 for purchases. Media delivery costs 1.20 points.
+-- 1 point = Rp1.00 for purchases. Media delivery costs 1 point per media.
 -- Uploading FREE media does NOT consume points. Reward: 50 media = +10, 100 media = +20.
 -- ============================================================
 ALTER TABLE users ADD COLUMN IF NOT EXISTS points NUMERIC(18,2) NOT NULL DEFAULT 0;

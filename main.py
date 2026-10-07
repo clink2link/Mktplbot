@@ -14,6 +14,7 @@ from database import get_pool, close_db, init_db
 from tasks.auto_delete import auto_delete_worker
 from tasks.payment_worker import payment_worker
 from tasks.vip_expired import vip_expired_worker
+from handlers.admin.settings import scheduler_loop
 from handlers.bayargg import router as bayargg_webhook_router
 from handlers.cashi_webhook import router as cashi_webhook_router
 
@@ -76,6 +77,11 @@ async def start_workers():
     create_task(
         "VIP_EXPIRED",
         vip_expired_worker()
+    )
+
+    create_task(
+        "SCHEDULER",
+        scheduler_loop(bot)
     )
 
     create_task(

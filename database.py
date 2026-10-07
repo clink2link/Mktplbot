@@ -79,6 +79,10 @@ async def get_showjs_pool():
     async with _showjs_lock:
         if _showjs_pool is not None:
             return _showjs_pool
+        async def _showjs_connection_init(conn):
+            # Defense in depth: the bridge must never mutate Showjs.
+            await conn.execute("SET default_transaction_read_only = on")
+
         _showjs_pool = await asyncpg.create_pool(
             dsn=SHOWJS_DATABASE_URL,
             min_size=1,
@@ -87,6 +91,7 @@ async def get_showjs_pool():
             max_inactive_connection_lifetime=300,
             statement_cache_size=0,
             ssl="require",
+            init=_showjs_connection_init,
         )
         logging.info("✅ Showjs PostgreSQL connected (read-only bridge)")
     return _showjs_pool
@@ -123,6 +128,16 @@ async def init_db():
     async with pool.acquire() as conn:
         await conn.execute(sql)
         logging.info("✅ Database initialized from %s", schema_path.name)
+
+    # Encrypt legacy plaintext B2 credentials after the schema exists.
+    try:
+        from utils.b2_storage import migrate_b2_credentials, log_b2_credential_key_status
+        log_b2_credential_key_status()
+        await migrate_b2_credentials()
+    except Exception:
+        # Do not prevent the bot from starting because an optional B2
+        # credential migration failed; B2 operations will report the error.
+        logging.exception("⚠️ B2 credential migration failed")
 
 
 # ========================

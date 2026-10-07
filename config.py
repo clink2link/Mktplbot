@@ -35,6 +35,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Optional read-only database used by the Showjs media-code bridge.
 SHOWJS_DATABASE_URL = os.getenv("SHOWJS_DATABASE_URL", "").strip()
 
+# Stable encryption key for B2 application-key secrets.
+# Keep this value unchanged while stored B2 credentials are in use.
+B2_CREDENTIAL_KEY = os.getenv("B2_CREDENTIAL_KEY", "").strip()
+
 try:
     STORAGE_CHANNEL_ID = int(
         os.getenv(
