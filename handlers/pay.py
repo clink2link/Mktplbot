@@ -927,7 +927,7 @@ async def _create_points_provider(call, points_amount: int, price_amount: int, p
                 amount=price_amount,
                 description=f"Buy {points_amount} points",
                 customer_name=call.from_user.full_name,
-                payment_method="qris",
+                payment_method=None,
             )
     except Exception:
         logger.exception("POINT %s CREATE ERROR", provider.upper())
