@@ -310,7 +310,7 @@ async def download_file_from_b2(
 ) -> bool:
     """Download one B2 object.
 
-    Showjs bridge uses B2 only. No Telegram file_id fallback is performed here.
+    Showjs bridge uses B2 only. No Telegram file_id fallback is performed here.\n    Availability is determined by the actual download, not HeadObject.
     """
     account = None
 
@@ -338,12 +338,10 @@ async def download_file_from_b2(
         def _download_sync():
             client = _client(account)
 
-            # First verify that the exact object exists.
-            client.head_object(
-                Bucket=account["bucket"],
-                Key=object_key,
-            )
-
+            # Do NOT call HeadObject here.
+            # Some B2 application keys can download an object but are not
+            # permitted to perform HeadObject. The download itself is the
+            # authoritative availability check.
             client.download_file(
                 account["bucket"],
                 object_key,
