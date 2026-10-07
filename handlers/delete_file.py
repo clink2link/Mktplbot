@@ -7,7 +7,6 @@ from aiogram.types import (
 
 from database import get_pool
 from bot import bot
-from config import STORAGE_CHANNEL_ID
 
 
 router = Router()
@@ -116,29 +115,8 @@ async def delete_file(call: CallbackQuery):
         code
     )
 
-
-
-    # =========================
-    # HAPUS MEDIA DI STORAGE CHANNEL
-    # =========================
-
-    for media in medias:
-
-        try:
-
-            await bot.delete_message(
-                chat_id=STORAGE_CHANNEL_ID,
-                message_id=media["message_id"]
-            )
-
-
-        except Exception as e:
-
-            print(
-                f"Gagal hapus media {media['message_id']}: {e}"
-            )
-
-
+    # Telegram Storage Channel sudah tidak digunakan.
+    # Hapus hanya record database; B2/file_id tetap menjadi sumber media.
 
     # =========================
     # HAPUS DATABASE MEDIA

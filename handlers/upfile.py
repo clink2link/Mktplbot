@@ -25,7 +25,6 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import CHANNEL_ID
 from database import get_pool
 from keyboards.join import join_kb
 from utils.force_sub import check_force_sub
@@ -52,7 +51,6 @@ UPDATE_DELAY = 0.7
 COPY_DELAY = 1.5
 
 # Channel review paid file.
-REVIEW_CHANNEL_ID = -1003993516320
 
 
 # =========================================================
@@ -1748,75 +1746,15 @@ async def send_paid_review(
                     media=photo_id,
                 )
             )
+    # Review Channel sudah tidak digunakan.
+    # Review code tetap dibuat/disimpan bila fitur review dipakai,
+    # tetapi tidak ada pengiriman otomatis ke channel Telegram.
+    logger.info(
+        "REVIEW CHANNEL DISABLED | code=%s | review_code=%s",
+        code,
+        review_code,
+    )
 
-    # -----------------------------------------------------
-    # SEND
-    # -----------------------------------------------------
-
-    try:
-
-        await bot.send_media_group(
-            chat_id=REVIEW_CHANNEL_ID,
-            media=media_group,
-        )
-        await bot.send_message(
-            chat_id=REVIEW_CHANNEL_ID,
-            text=(
-                f"📝 <b>{safe_title}</b>\n"
-                f"👀 Code review: <code>{escape(review_code)}</code>\n"
-                f"📦 Code media: <code>{safe_code}</code>\n"
-                f"📦 Total media: <b>{media_count}</b>\n"
-                f"💎 Media: <b>{'PAID' if price > 0 else 'FREE'}</b>\n"
-                f"🤖 Bot: @{safe_bot_username}"
-            ),
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="👀 Buka Review", url=f"https://t.me/{bot_username}?start={review_code}")],
-                [InlineKeyboardButton(text="📦 Buka Code Media", url=f"https://t.me/{bot_username}?start={safe_code}")],
-            ]),
-        )
-
-        logger.info(
-            "PAID REVIEW SENT | code=%s | photos=%s",
-            code,
-            len(review_photos),
-        )
-
-    except TelegramRetryAfter as e:
-
-        retry_after = max(
-            float(e.retry_after),
-            0.5,
-        )
-
-        logger.warning(
-            "REVIEW RATE LIMIT | retry_after=%.2fs | code=%s",
-            retry_after,
-            code,
-        )
-
-        await asyncio.sleep(
-            retry_after + 0.2
-        )
-
-        await bot.send_media_group(
-            chat_id=REVIEW_CHANNEL_ID,
-            media=media_group,
-        )
-
-    except Exception:
-
-        logger.exception(
-            "PAID REVIEW ERROR | code=%s",
-            code,
-        )
-
-        raise
-
-
-# =========================================================
-# SEND UPLOAD LOG
-# =========================================================
 
 async def send_upload_log(
     bot,
@@ -1830,180 +1768,7 @@ async def send_upload_log(
     price: int,
 ):
 
-    try:
-
-        me = await bot.get_me()
-
-        bot_username = (
-            me.username
-            or "Unknown"
-        )
-
-        # -------------------------------------------------
-        # ESCAPE HTML
-        # -------------------------------------------------
-
-        safe_title = escape(
-            title or "Untitled"
-        )
-
-        safe_bot_username = escape(
-            bot_username
-        )
-
-        safe_code = escape(
-            code
-        )
-
-        mode = (
-            f"💰 PAID {rupiah(price)}"
-            if is_paid
-            else "🆓 FREE"
-        )
-
-        # -------------------------------------------------
-        # CLEAN UPDATE MESSAGE
-        # -------------------------------------------------
-
-        text = (
-            "📤 <b>UPLOAD BARU</b>\n"
-            "━━━━━━━━━━━━━━\n"
-            f"🤖 Bot: @{safe_bot_username}\n"
-            f"🆔 ID: <code>{mask_user_id(user_id)}</code>\n"
-            f"📝 Judul: {safe_title}\n"
-            f"👀 Code review: <code>{escape(review_code or '-')}</code>\n"
-            f"📦 Code media: <code>{safe_code}</code>\n"
-            f"📦 Total media: {media_count}\n"
-            f"💎 Media: <b>{'PAID' if is_paid else 'FREE'}</b>\n"
-            f"💰 Harga: {rupiah(price) if is_paid else 'Gratis'}"
-        )
-
-        await bot.send_message(
-
-            chat_id=CHANNEL_ID,
-
-            text=text,
-
-            parse_mode="HTML",
-        )
-
-        logger.info(
-            "UPLOAD LOG SENT | code=%s",
-            code,
-        )
-
-    except Exception:
-
-        logger.exception(
-            "UPLOAD LOG ERROR | code=%s",
-            code,
-        )
-
-
-# =========================================================
-# OPTIONAL B2 SECONDARY COPY
-# =========================================================
-
-async def _save_media_copy_to_b2(bot, item: dict) -> dict:
-    """Create a secondary B2 copy while keeping Telegram file_id authoritative.
-
-    Any B2 error is swallowed and returned as a non-fatal status. This is
-    deliberately called before the DB save so the media JSON contains both
-    file_id and, when available, the B2 object reference.
-    """
-    result = dict(item)
-    result["b2_status"] = "disabled_or_failed"
-
-    file_id = result.get("file_id")
-    if not file_id:
-        return result
-
-    tmp_path = None
-    try:
-        tg_file = await bot.get_file(file_id)
-        file_path = getattr(tg_file, "file_path", None)
-        if not file_path:
-            return result
-
-        suffix = ""
-        file_name = str(result.get("file_name") or "file")
-        if "." in file_name:
-            suffix = "." + file_name.rsplit(".", 1)[-1][:12]
-
-        with tempfile.NamedTemporaryFile(prefix="pastele_b2_", suffix=suffix, delete=False) as tmp:
-            tmp_path = tmp.name
-
-        await bot.download_file(file_path, destination=tmp_path)
-
-        b2 = await upload_file_to_b2(
-            tmp_path,
-            file_name=file_name,
-            content_type={
-                "document": "application/octet-stream",
-                "video": "video/mp4",
-                "photo": "image/jpeg",
-                "audio": "audio/mpeg",
-                "voice": "audio/ogg",
-                "animation": "video/mp4",
-            }.get(str(result.get("type") or "").lower()),
-            object_prefix="pastelebot",
-        )
-
-        if b2:
-            result["b2"] = b2
-            result["b2_status"] = "available"
-        else:
-            result["b2_status"] = "failed_file_id_fallback"
-
-    except Exception:
-        logger.exception(
-            "B2 COPY NON-FATAL | file_id=%s | Telegram file_id remains fallback",
-            file_id,
-        )
-        result["b2_status"] = "failed_file_id_fallback"
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
-    return result
-
-
-async def _backup_media_to_b2(bot, media: list[dict]) -> list[dict]:
-    """Best-effort B2 backup. Never raises because Telegram file_id is fallback."""
-    try:
-        pool = await get_pool()
-        enabled = await pool.fetchval(
-            "SELECT value FROM settings WHERE key=$1",
-            "b2_upload_enabled",
-        )
-        if str(enabled or "on").lower() not in {"on", "1", "true", "yes"}:
-            return [dict(item, b2_status="disabled_by_admin") for item in media]
-    except Exception:
-        # If the control setting cannot be read, preserve the original
-        # upload path and keep Telegram file_id as the fallback.
-        logger.exception("B2 CONTROL CHECK FAILED; continuing without B2 copy")
-        return [dict(item, b2_status="control_check_failed_file_id_fallback") for item in media]
-
-    output = []
-    for item in media:
-        output.append(await _save_media_copy_to_b2(bot, item))
-    return output
-
-
-# =========================================================
-# FINAL SAVE
-# =========================================================
-
-async def finalize_save(
-    message: Message,
-    state: FSMContext,
-    user_id: int,
-):
-
-    data = await state.get_data()
+    # Upload log channel is disabled; upload state is stored in the database and B2.
 
     # -----------------------------------------------------
     # PREVENT DOUBLE SAVE

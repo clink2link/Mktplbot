@@ -10,7 +10,6 @@ from handlers.page import send_page
 
 logger = logging.getLogger(__name__)
 
-BUY_CHANNEL_ID = -1004413314849
 BOT_USERNAME = "botmarketRobot"
 
 
@@ -127,19 +126,6 @@ async def bayar_webhook(request: Request):
             ]
         )
 
-        try:
-            await bot.send_message(
-                chat_id=BUY_CHANNEL_ID,
-                text=(
-                    "💸 <b>FILE PAID SUCCESS</b>\n\n"
-                    f"📦 <b>Code:</b> <code>{tx['file_code']}</code>\n"
-                    f"👤 <b>User:</b> <code>{tx['user_id']}</code>"
-                ),
-                parse_mode="HTML",
-                reply_markup=kb
-            )
-        except Exception as e:
-            logger.warning(f"Gagal kirim notif channel: {e}")
 
         logger.info(f"FILE TERKIRIM: {invoice_id}")
 
