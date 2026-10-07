@@ -3,7 +3,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database import get_pool
-from config import ADMIN_IDS, SHOWJS_DATABASE_URL
+from config import ADMIN_IDS
 from handlers.admin.admins import is_admin
 from utils.b2_storage import get_b2_accounts
 
@@ -15,8 +15,6 @@ FEATURES = [
     ("scheduler", "⏰ Scheduler", "off"),
     ("telegram_safety_enabled", "🛡 Telegram Safety", "on"),
     ("b2_upload_enabled", "☁️ B2 Upload", "on"),
-    ("showjs_bridge_enabled", "🔗 Showjs CODE", "on"),
-    ("showjs_b2_enabled", "🗄️ Showjs B2", "on"),
     ("payment_cashi_enabled", "📲 Cashi", "on"),
     ("payment_bayargg_enabled", "⚡ BayarGG", "on"),
     ("payment_manual_enabled", "📷 QR Manual", "off"),
@@ -44,7 +42,6 @@ def main_kb():
         ("💰 Balance / Points", "admin_balance"),
         ("📢 Broadcast", "admin_broadcast"),
         ("🗄️ B2 Storage", "admin_b2"),
-        ("🔗 Showjs Media", "admin_showjs"),
         ("⚙️ Feature Control", "admin_features"),
         ("🩺 Health / Repair", "admin_health"),
         ("🛡️ Settings", "admin_settings"),
@@ -74,7 +71,6 @@ async def render(call):
         f"💳 Pending payment: <b>{pending}</b>\n"
         f"🏧 Pending/process withdraw: <b>{wd}</b>\n"
         f"☁️ B2 accounts: <b>{len(b2)}</b>\n"
-        f"🔗 Showjs DB: <b>{'READY' if SHOWJS_DATABASE_URL else 'NOT SET'}</b>\n\n"
         "Pilih modul di bawah untuk mengelola bot tanpa menyentuh source code."
     )
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=main_kb())
@@ -116,32 +112,6 @@ async def admin_feature_toggle(call: CallbackQuery):
     await call.answer(f"{entry[1]} {'ON' if not current else 'OFF'}")
     await admin_features(call)
 
-@router.callback_query(F.data == "admin_showjs")
-async def admin_showjs(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer("❌ Tidak memiliki akses", show_alert=True)
-    pool = await get_pool()
-    bridge = await setting(pool, "showjs_bridge_enabled", "on")
-    b2 = await setting(pool, "showjs_b2_enabled", "on")
-    accounts = await get_b2_accounts()
-    text = (
-        "🔗 <b>SHOWJS MEDIA CONTROL</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"DB Showjs: <b>{'READY' if SHOWJS_DATABASE_URL else 'NOT SET'}</b>\n"
-        f"CODE bridge: <b>{'ON' if bridge else 'OFF'}</b>\n"
-        f"Showjs B2: <b>{'ON' if b2 else 'OFF'}</b>\n"
-        f"B2 accounts: <b>{len(accounts)}</b>\n\n"
-        "Media Showjs dibaca dari DB Showjs dan object B2 sesuai drive_account."
-    )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔗 Toggle CODE", callback_data="admin_feature:showjs_bridge_enabled")
-    kb.button(text="🗄️ Toggle B2", callback_data="admin_feature:showjs_b2_enabled")
-    kb.button(text="☁️ Kelola B2", callback_data="admin_b2")
-    kb.button(text="🩺 Health", callback_data="admin_health")
-    kb.button(text="⬅️ Control Center", callback_data="admin_center")
-    kb.adjust(2, 2, 1)
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
-    await call.answer()
 
 @router.callback_query(F.data == "admin_admins")
 async def admin_admins(call: CallbackQuery):

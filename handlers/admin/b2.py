@@ -71,7 +71,7 @@ async def admin_b2_list(call: CallbackQuery):
 async def admin_b2_add(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id): return
     await state.clear(); await state.set_state(B2State.account_id)
-    await call.message.edit_text("➕ <b>TAMBAH B2</b>\n\nKirim Account ID <b>1-10</b>.\nID harus sesuai <code>drive_account</code> media Showjs.", parse_mode="HTML")
+    await call.message.edit_text("➕ <b>TAMBAH B2</b>\n\nKirim Account ID <b>1-10</b>.\nID akun B2 Pastele (1-10).", parse_mode="HTML")
     await call.answer()
 
 
@@ -93,7 +93,12 @@ async def b2_name(message: Message, state: FSMContext):
 @router.message(B2State.region)
 async def b2_region(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id): return
-    await state.update_data(region=(message.text or '').strip()); await state.set_state(B2State.endpoint)
+    raw=(message.text or '').strip().rstrip('/')
+    if '://' in raw:
+        raw=raw.split('://',1)[1].split('/',1)[0]
+    if raw.startswith('s3.') and raw.endswith('.backblazeb2.com'):
+        raw=raw[3:-len('.backblazeb2.com')]
+    await state.update_data(region=raw); await state.set_state(B2State.endpoint)
     await message.answer("S3 endpoint? Contoh: <code>https://s3.us-east-005.backblazeb2.com</code>", parse_mode="HTML")
 
 @router.message(B2State.endpoint)

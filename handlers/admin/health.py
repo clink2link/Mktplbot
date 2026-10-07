@@ -6,8 +6,8 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import ADMIN_IDS, SHOWJS_DATABASE_URL
-from database import get_pool, get_showjs_pool, init_db
+from config import ADMIN_IDS
+from database import get_pool, init_db
 from handlers.admin.admins import is_admin
 from utils.b2_storage import get_b2_accounts, check_b2_account
 
@@ -15,8 +15,6 @@ router = Router()
 
 CONTROL_KEYS = (
     ("b2_upload_enabled", "☁️ B2 Upload"),
-    ("showjs_bridge_enabled", "🔗 Showjs CODE"),
-    ("showjs_b2_enabled", "🗄️ Showjs B2"),
     ("admin_auto_repair", "🛠 Auto Repair"),
 )
 
@@ -48,7 +46,7 @@ async def _status_text():
     pool = await get_pool()
     lines = ["🎛 <b>CONTROL CENTER</b>", "━━━━━━━━━━━━━━━━━━"]
     for key, label in CONTROL_KEYS:
-        enabled = await _setting(pool, key, "on" if key != "showjs_b2_enabled" else "on")
+        enabled = await _setting(pool, key, "on")
         lines.append(f"{label}: <b>{'🟢 ON' if enabled else '🔴 OFF'}</b>")
     try:
         b2 = await get_b2_accounts()
@@ -57,7 +55,6 @@ async def _status_text():
         lines.append(f"🎯 B2 target: <b>{targets[0]['account_id'] if targets else 'AUTO'}</b>")
     except Exception:
         lines.append("\n☁️ B2: <b>ERROR</b>")
-    lines.append(f"🔗 Showjs DB: <b>{'CONFIGURED' if SHOWJS_DATABASE_URL else 'NOT CONFIGURED'}</b>")
     return "\n".join(lines)
 
 @router.callback_query(F.data == "admin_control")
@@ -87,15 +84,6 @@ async def admin_health(call: CallbackQuery):
     except Exception as exc:
         checks.append(f"🔴 Main DB: {str(exc)[:160]}")
 
-    if SHOWJS_DATABASE_URL:
-        try:
-            sp = await get_showjs_pool()
-            await sp.fetchval("SELECT 1")
-            checks.append("🟢 Showjs DB")
-        except Exception as exc:
-            checks.append(f"🔴 Showjs DB: {str(exc)[:160]}")
-    else:
-        checks.append("🟡 Showjs DB: ENV belum diisi")
 
     try:
         me = await call.bot.get_me()
@@ -130,8 +118,6 @@ async def admin_repair(call: CallbackQuery):
         pool = await get_pool()
         defaults = {
             "b2_upload_enabled": "on",
-            "showjs_bridge_enabled": "on",
-            "showjs_b2_enabled": "on",
             "admin_auto_repair": "on",
         }
         for key, value in defaults.items():
