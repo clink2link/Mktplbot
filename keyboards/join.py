@@ -1,14 +1,19 @@
+from urllib.parse import quote
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from utils.force_sub import get_force_sub_channel
+from utils.force_sub import CHANNELS
 
-async def join_kb(bot_username: str | None = None, user_id: int | None = None, lang: str = "id"):
+def join_kb(bot_username: str | None = None, user_id: int | None = None, lang: str = "id"):
     rows = []
-    channel = await get_force_sub_channel()
-    if channel:
-        name = channel.get("name") or ("Channel Update" if lang == "id" else "Update Channel" if lang == "en" else "更新频道")
-        url = channel.get("url") or ""
-        if url:
-            rows.append([InlineKeyboardButton(text=f"📢 {name}", url=url)])
+    for idx, channel in enumerate(CHANNELS, 1):
+        name = (
+            "Channel Update" if idx == 1 else "Saluran Backup"
+        ) if lang == "id" else (
+            "Update Channel" if idx == 1 else "Backup Channel"
+        ) if lang == "en" else (
+            "更新频道" if idx == 1 else "备用频道"
+        )
+        rows.append([InlineKeyboardButton(text=f"📢 {name}", url=channel["url"])])
+
     rows.append([InlineKeyboardButton(
         text=("✅ Saya Sudah Join" if lang == "id" else "✅ I Joined" if lang == "en" else "✅ 我已加入"),
         callback_data="check_sub"
