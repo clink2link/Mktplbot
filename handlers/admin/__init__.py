@@ -10,9 +10,6 @@ from .broadcast import router as broadcast_router
 from .settings import router as settings_router
 from .logs import router as logs_router
 from .admins import router as admins_router
-from .b2 import router as b2_router
-from .health import router as health_router
-from .center import router as center_router
 
 router = Router()
 
@@ -26,6 +23,3 @@ router.include_router(broadcast_router)
 router.include_router(settings_router)
 router.include_router(logs_router)
 router.include_router(admins_router)
-router.include_router(b2_router)
-router.include_router(health_router)
-router.include_router(center_router)

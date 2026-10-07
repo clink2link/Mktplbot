@@ -76,20 +76,6 @@ async def safe_sum(pool, column, table):
 
 
 
-
-async def safe_sum_paid_payments(pool):
-    try:
-        return await pool.fetchval(
-            """
-            SELECT COALESCE(SUM(amount), 0)
-            FROM payments
-            WHERE status='paid'
-            """
-        ) or 0
-    except Exception as e:
-        print("REVENUE ERROR:", e)
-        return 0
-
 # =========================
 # DASHBOARD
 # =========================
@@ -105,7 +91,7 @@ async def dashboard_text():
 
     # FINANCE
     balance = await safe_sum(pool, "balance", "users")
-    revenue = await safe_sum_paid_payments(pool)
+    revenue = await safe_sum(pool, "total_income", "files")
 
     # PAYMENT
     pending_payment = 0
@@ -228,7 +214,6 @@ def dashboard_keyboard():
 
     kb = InlineKeyboardBuilder()
 
-    kb.button(text="🎛 Full Control Center", callback_data="admin_center")
 
     kb.button(
         text="👤 Users",
@@ -266,18 +251,8 @@ def dashboard_keyboard():
     )
 
     kb.button(
-        text="🗄️ B2 Storage",
-        callback_data="admin_b2"
-    )
-
-    kb.button(
         text="⚙️ Settings",
         callback_data="admin_settings"
-    )
-
-    kb.button(
-        text="🩺 Health & Repair",
-        callback_data="admin_control"
     )
 
 

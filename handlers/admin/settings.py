@@ -80,12 +80,6 @@ class SafetyState(StatesGroup):
     waiting_channel_delay = State()
 
 
-class ForceSubState(StatesGroup):
-    waiting_channel_id = State()
-    waiting_channel_url = State()
-    waiting_channel_name = State()
-
-
 # =========================
 # SETTINGS MENU
 # =========================
@@ -155,12 +149,6 @@ async def admin_settings(call: CallbackQuery):
             ],
             [
                 InlineKeyboardButton(
-                    text="📢 Force Sub",
-                    callback_data="force_sub_settings"
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="🎯 Share Unlock",
                     callback_data="admin_share_unlock"
                 )
@@ -188,135 +176,6 @@ async def admin_settings(call: CallbackQuery):
 
     await call.answer()
 
-
-
-
-# =========================
-# FORCE SUB
-# =========================
-
-@router.callback_query(F.data == "force_sub_settings")
-async def force_sub_settings(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer("❌ Tidak memiliki akses", show_alert=True)
-
-    pool = await get_pool()
-    enabled = str(await get_setting(pool, "force_sub_enabled", "on")).lower() in {"1", "true", "on", "yes"}
-    channel_id = await get_setting(pool, "force_sub_channel_id", "")
-    channel_name = await get_setting(pool, "force_sub_channel_name", "Force Sub")
-    channel_url = await get_setting(pool, "force_sub_channel_url", "")
-
-    status = "🟢 ON" if enabled else "🔴 OFF"
-    configured = "✅ Sudah" if channel_id else "❌ Belum"
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Force Sub ({status})", callback_data="force_sub_toggle")],
-        [InlineKeyboardButton(text="🆔 Atur Channel ID", callback_data="force_sub_set_id")],
-        [InlineKeyboardButton(text="🔗 Atur Link Channel", callback_data="force_sub_set_url")],
-        [InlineKeyboardButton(text="✏️ Atur Nama Channel", callback_data="force_sub_set_name")],
-        [InlineKeyboardButton(text="⬅️ Settings", callback_data="admin_settings")],
-    ])
-
-    await call.message.edit_text(
-        f"📢 <b>FORCE SUB</b>\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"Status: <b>{status}</b>\n"
-        f"Channel: <b>{configured}</b>\n"
-        f"ID: <code>{channel_id or '-'}</code>\n"
-        f"Nama: <b>{channel_name or '-'}</b>\n"
-        f"Link: {channel_url or '-'}\n\n"
-        "User hanya akan diminta join channel yang dikonfigurasi di sini.",
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
-    await call.answer()
-
-
-@router.callback_query(F.data == "force_sub_toggle")
-async def force_sub_toggle(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer("❌ Tidak memiliki akses", show_alert=True)
-    pool = await get_pool()
-    old = str(await get_setting(pool, "force_sub_enabled", "on")).lower() in {"1", "true", "on", "yes"}
-    await set_setting(pool, "force_sub_enabled", "off" if old else "on")
-    await call.answer("Force Sub " + ("OFF" if old else "ON"))
-    return await force_sub_settings(call)
-
-
-@router.callback_query(F.data == "force_sub_set_id")
-async def force_sub_set_id(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer("❌ Tidak memiliki akses", show_alert=True)
-    await state.clear()
-    await state.set_state(ForceSubState.waiting_channel_id)
-    await call.message.answer(
-        "📢 <b>CHANNEL ID FORCE SUB</b>\n\n"
-        "Kirim ID channel, contoh:\n"
-        "<code>-1001234567890</code>",
-        parse_mode="HTML",
-    )
-    await call.answer()
-
-
-@router.message(ForceSubState.waiting_channel_id)
-async def force_sub_save_id(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    value = (message.text or "").strip()
-    try:
-        int(value)
-    except ValueError:
-        return await message.answer("❌ Channel ID harus berupa angka, contoh <code>-1001234567890</code>.", parse_mode="HTML")
-    pool = await get_pool()
-    await set_setting(pool, "force_sub_channel_id", value)
-    await state.clear()
-    await message.answer("✅ Channel ID Force Sub disimpan.")
-
-
-@router.callback_query(F.data == "force_sub_set_url")
-async def force_sub_set_url(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer("❌ Tidak memiliki akses", show_alert=True)
-    await state.clear()
-    await state.set_state(ForceSubState.waiting_channel_url)
-    await call.message.answer("🔗 Kirim link invite/public channel Force Sub.")
-    await call.answer()
-
-
-@router.message(ForceSubState.waiting_channel_url)
-async def force_sub_save_url(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    value = (message.text or "").strip()
-    if not value.startswith(("https://t.me/", "http://t.me/", "tg://")):
-        return await message.answer("❌ Link channel tidak valid.")
-    pool = await get_pool()
-    await set_setting(pool, "force_sub_channel_url", value)
-    await state.clear()
-    await message.answer("✅ Link Force Sub disimpan.")
-
-
-@router.callback_query(F.data == "force_sub_set_name")
-async def force_sub_set_name(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer("❌ Tidak memiliki akses", show_alert=True)
-    await state.clear()
-    await state.set_state(ForceSubState.waiting_channel_name)
-    await call.message.answer("✏️ Kirim nama channel Force Sub.")
-    await call.answer()
-
-
-@router.message(ForceSubState.waiting_channel_name)
-async def force_sub_save_name(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    value = (message.text or "").strip()[:100]
-    if not value:
-        return await message.answer("❌ Nama channel tidak boleh kosong.")
-    pool = await get_pool()
-    await set_setting(pool, "force_sub_channel_name", value)
-    await state.clear()
-    await message.answer("✅ Nama Force Sub disimpan.")
 
 
 # =========================
