@@ -4,6 +4,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def env_int(name: str, default: int = 0) -> int:
+    """Read an integer environment variable safely."""
+    value = os.getenv(name, "")
+    if value is None or not str(value).strip():
+        return default
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return default
+
+
 # ============================================================
 # GENERAL
 # ============================================================
