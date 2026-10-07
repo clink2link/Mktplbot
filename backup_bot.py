@@ -10,7 +10,6 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import (
     BACKUP_BOT_TOKEN,
-    STORAGE_CHANNEL_ID,
     BOT_URL
 )
 
@@ -273,26 +272,8 @@ async def send_file(
             msg_id = item.get("message_id")
             file_id = item.get("file_id")
             file_type = (item.get("type") or "document").lower()
-
-
-            # =========================
-            # PRIORITAS STORAGE CHANNEL
-            # =========================
-            if msg_id:
-
-                await backup_bot.copy_message(
-                    chat_id=message.chat.id,
-                    from_chat_id=STORAGE_CHANNEL_ID,
-                    message_id=msg_id
-                )
-
-                success += 1
-
-
-            # =========================
-            # FALLBACK FILE_ID
-            # =========================
-            elif file_id:
+            # Storage Channel is disabled. Telegram file_id is authoritative.
+            if file_id:
 
 
                 if file_type == "video":

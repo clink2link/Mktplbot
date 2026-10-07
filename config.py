@@ -39,15 +39,6 @@ SHOWJS_DATABASE_URL = os.getenv("SHOWJS_DATABASE_URL", "").strip()
 # Keep this value unchanged while stored B2 credentials are in use.
 B2_CREDENTIAL_KEY = os.getenv("B2_CREDENTIAL_KEY", "").strip()
 
-try:
-    STORAGE_CHANNEL_ID = int(
-        os.getenv(
-            "STORAGE_CHANNEL_ID",
-            "0",
-        ).strip()
-    )
-except (ValueError, TypeError):
-    STORAGE_CHANNEL_ID = 0
 
 
 # ============================================================
@@ -223,78 +214,6 @@ MANUAL_PAYMENT_ENABLED = (
 
 
 # ============================================================
-# CHANNEL
-# ============================================================
-
-def env_int(
-    name: str,
-    default: int = 0,
-) -> int:
-
-    raw = os.getenv(name)
-
-    if raw is None:
-        return default
-
-    raw = str(raw).strip()
-
-    if not raw:
-        return default
-
-    try:
-        return int(raw)
-
-    except (ValueError, TypeError):
-        return default
-
-
-CHANNEL_ID = env_int(
-    "CHANNEL_ID",
-    -1004441808999,
-)
-
-
-GROUP_ID = env_int(
-    "GROUP_ID",
-    CHANNEL_ID,
-)
-
-
-NOTIF_CHANNEL_ID = env_int(
-    "NOTIF_CHANNEL_ID",
-    -1004413314849,
-)
-
-
-# ============================================================
-# PUBLIC CHANNEL LINKS
-# ============================================================
-
-REVIEW_CHANNEL_URL = os.getenv(
-    "REVIEW_CHANNEL_URL",
-    "https://t.me/inforobotnew",
-).strip()
-
-
-NOTIFICATION_CHANNEL_URL = os.getenv(
-    "NOTIFICATION_CHANNEL_URL",
-    "https://t.me/+iG0rS6GFY3Y2NTNk",
-).strip()
-
-
-TRANSACTION_CHANNEL_URL = os.getenv(
-    "TRANSACTION_CHANNEL_URL",
-    "https://t.me/+0ddS3Ha4c2pkNmJl",
-).strip()
-
-
-ALL_CODE_CHANNEL_URL = os.getenv(
-    "ALL_CODE_CHANNEL_URL",
-    "https://t.me/inforobotnew",
-).strip()
-
-
-# ============================================================
 # WITHDRAW
 # ============================================================
 
@@ -377,12 +296,6 @@ if not DATABASE_URL:
         "DATABASE_URL belum di-set di Railway Variables"
     )
 
-
-if not STORAGE_CHANNEL_ID:
-
-    raise ValueError(
-        "STORAGE_CHANNEL_ID belum di-set di Railway Variables"
-    )
 
 
 if not ADMIN_IDS:
@@ -510,14 +423,6 @@ print(
 
 print(
     f"ADMIN_COUNT       : {len(ADMIN_IDS)}"
-)
-
-print(
-    f"STORAGE_CHANNEL   : {STORAGE_CHANNEL_ID}"
-)
-
-print(
-    f"NOTIF_CHANNEL     : {NOTIF_CHANNEL_ID}"
 )
 
 print(

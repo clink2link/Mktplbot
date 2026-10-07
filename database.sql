@@ -126,6 +126,10 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 INSERT INTO settings(key,value) VALUES
+('force_sub_enabled','on'),
+('force_sub_channel_id',''),
+('force_sub_channel_name','Force Sub'),
+('force_sub_channel_url',''),
 ('maintenance','off'),
 ('maintenance_text','Maintenance sedang berlangsung. Silakan coba lagi nanti.'),
 ('withdraw_enabled','on'),
