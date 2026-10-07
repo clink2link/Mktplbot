@@ -176,10 +176,7 @@ CODE_REGEX = re.compile(
     rf"(?<![A-Za-z0-9]){re.escape(CODE_PREFIX)}[A-Za-z0-9]{{{CODE_SUFFIX_LENGTH}}}(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
-CODE_EXACT_RE = re.compile(
-    rf"^\\s*{re.escape(CODE_PREFIX)}[A-Za-z0-9]{{{CODE_SUFFIX_LENGTH}}}\\s*$",
-    re.IGNORECASE,
-)
+
 
 def normalize_code(code: str) -> str:
     """
@@ -787,7 +784,13 @@ async def process_code(
 # A CODE can arrive from anywhere in the chat, not only after pressing
 # Get File. It always enters the same process_code() pipeline.
 @router.message(
-    F.text.regexp(CODE_EXACT_RE)
+    F.text.regexp(CODE_REGEX)
+    | F.text.regexp(
+        re.compile(
+            r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])",
+            re.IGNORECASE,
+        )
+    )
 )
 async def receive_code_global(
     message: Message,
@@ -801,13 +804,20 @@ async def receive_code_global(
     the Open Page/Open All loading flow and must never show
     "Mencari Media Code..." merely because the CODE was sent directly.
 
-    We accept the configured Pastelebot_ format.
+    We accept the configured Pastelebot_ format and the legacy
+    Jsshowbot_ format so existing shared codes are handled too.
     """
     text = (message.text or "").strip()
     if not text:
         return
 
-    patterns = [CODE_EXACT_RE]
+    patterns = [
+        CODE_REGEX,
+        re.compile(
+            r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])",
+            re.IGNORECASE,
+        ),
+    ]
 
     match = None
     for pattern in patterns:
@@ -873,6 +883,8 @@ async def receive_code(
         ).strip()
 
         match = CODE_REGEX.search(text)
+        if not match:
+            match = re.search(r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]{14}(?![A-Za-z0-9])", text, re.IGNORECASE)
 
         # ====================================================
         # INVALID CODE

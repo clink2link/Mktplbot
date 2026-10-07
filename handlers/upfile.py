@@ -5,8 +5,6 @@ import re
 import secrets
 import string
 import time
-import os
-import tempfile
 
 from contextlib import asynccontextmanager
 from html import escape
@@ -25,12 +23,12 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import CHANNEL_ID
 from database import get_pool
 from keyboards.join import join_kb
 from utils.force_sub import check_force_sub
 from utils.share_unlock import telegram_setting, share_url
 from utils.user_lang import get_user_language
-from utils.b2_storage import upload_file_to_b2
 
 
 router = Router()
@@ -51,6 +49,7 @@ UPDATE_DELAY = 0.7
 COPY_DELAY = 1.5
 
 # Channel review paid file.
+REVIEW_CHANNEL_ID = -1003993516320
 
 
 # =========================================================
@@ -495,7 +494,7 @@ async def start_upload(
 
         return await call.message.answer(
             "❌ Kamu belum join channel.",
-            reply_markup=await join_kb(),
+            reply_markup=join_kb(),
         )
 
     # -----------------------------------------------------
@@ -799,11 +798,12 @@ async def receive_media(
             )
 
         # -------------------------------------------------
-        # PRIMARY STORAGE: TELEGRAM FILE_ID
+        # FILE_ID STORAGE
         # -------------------------------------------------
-        # Every upload keeps Telegram file_id as the primary/fast path.
-        # Small media (<20 MiB) is additionally backed up to B2 after
-        # the upload batch is collected.
+        # Media is stored by Telegram file_id only. No storage channel,
+        # copy_message, or storage migration is used for uploads.
+        # file_id remains reusable by this bot after the original message
+        # is deleted, so the user's chat does not become the storage.
         source_chat_id = int(message.chat.id)
 
         # -------------------------------------------------
@@ -850,7 +850,7 @@ async def receive_media(
                     "📦 <b>UPLOAD MODE</b>\n\n"
                     f"📁 Media : "
                     f"<b>{len(media)}/{MAX_MEDIA}</b>\n"
-                    "💾 Penyimpanan : <b>Telegram file_id + B2</b>\n\n"
+                    "💾 Penyimpanan : <b>Telegram file_id</b>\n\n"
                     "Kirim media lagi atau tekan "
                     "<b>STOP & SAVE</b>."
                 ),
@@ -1541,132 +1541,12 @@ async def receive_review_photo(
 
 
 # =========================================================
-# B2 BACKUP FOR SMALL MEDIA
-# =========================================================
-# Telegram file_id remains the primary/fast delivery method.
-# Media strictly smaller than 20 MiB is also copied to B2 so the
-# database keeps a bot-independent backup. If Telegram is later
-# replaced/banned, media_sender can fall back to this B2 object.
-B2_BACKUP_MAX_BYTES = 20 * 1024 * 1024
-
-
-async def _backup_media_to_b2(bot, media: list[dict]) -> list[dict]:
-    """Create a B2 backup for every media item smaller than 20 MiB.
-
-    This never replaces Telegram file_id and never makes an upload fail.
-    B2 metadata is stored inside the media JSON.
-    """
-    result = []
-
-    for item in media:
-        item = dict(item)
-        size = int(item.get("file_size") or 0)
-
-        if not item.get("file_id") or size <= 0 or size >= B2_BACKUP_MAX_BYTES:
-            result.append(item)
-            continue
-
-        tmp_path = None
-        try:
-            tg_file = await bot.get_file(item["file_id"])
-            file_path = getattr(tg_file, "file_path", None)
-            if not file_path:
-                raise RuntimeError("Telegram file_path tidak tersedia")
-
-            suffix = ""
-            name = str(item.get("file_name") or "media")
-            if "." in name:
-                suffix = "." + name.rsplit(".", 1)[-1][:12]
-
-            fd, tmp_path = tempfile.mkstemp(
-                prefix="pastele_b2_backup_",
-                suffix=suffix,
-            )
-            os.close(fd)
-
-            await bot.download_file(file_path, destination=tmp_path)
-
-            backup = await upload_file_to_b2(
-                tmp_path,
-                file_name=name,
-                content_type=_media_content_type(item),
-            )
-
-            if backup:
-                item["b2_backup"] = True
-                item["b2_storage"] = "backblaze_b2"
-                item["b2_account_id"] = int(backup["account_id"])
-                item["b2_bucket"] = str(backup["bucket"])
-                item["b2_object_key"] = str(backup["object_key"])
-                item["b2_file_size"] = int(backup.get("file_size") or size)
-                item["b2_content_type"] = str(
-                    backup.get("content_type") or "application/octet-stream"
-                )
-                item["storage_status"] = "telegram_file_id+b2"
-                logger.info(
-                    "B2 BACKUP OK | file_id=%s | account=%s | key=%s | size=%s",
-                    str(item["file_id"])[:24],
-                    backup["account_id"],
-                    backup["object_key"],
-                    size,
-                )
-            else:
-                item["b2_backup"] = False
-                item["storage_status"] = "telegram_file_id_only"
-                logger.warning(
-                    "B2 BACKUP SKIPPED/FAILED | file=%s | size=%s",
-                    name,
-                    size,
-                )
-
-        except Exception:
-            item["b2_backup"] = False
-            item["storage_status"] = "telegram_file_id_only"
-            logger.exception(
-                "B2 BACKUP FAILED | file=%s | size=%s",
-                item.get("file_name") or "media",
-                size,
-            )
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-
-        result.append(item)
-
-    return result
-
-
-def _media_content_type(item: dict) -> str | None:
-    """Best-effort MIME type for the B2 object."""
-    explicit = item.get("mime_type") or item.get("content_type")
-    if explicit:
-        return str(explicit)
-
-    file_type = str(item.get("type") or "").lower()
-    if file_type == "video":
-        return "video/mp4"
-    if file_type in {"photo", "image"}:
-        return "image/jpeg"
-    if file_type == "audio":
-        return "audio/mpeg"
-    if file_type in {"animation", "gif"}:
-        return "image/gif"
-    return None
-
-
-
-
-# =========================================================
 # FINISH REVIEW
 # =========================================================
 
 @router.callback_query(
     F.data == "finish_review"
 )
-
 async def finish_review(
     call: CallbackQuery,
     state: FSMContext,
@@ -1865,15 +1745,75 @@ async def send_paid_review(
                     media=photo_id,
                 )
             )
-    # Review Channel sudah tidak digunakan.
-    # Review code tetap dibuat/disimpan bila fitur review dipakai,
-    # tetapi tidak ada pengiriman otomatis ke channel Telegram.
-    logger.info(
-        "REVIEW CHANNEL DISABLED | code=%s | review_code=%s",
-        code,
-        review_code,
-    )
 
+    # -----------------------------------------------------
+    # SEND
+    # -----------------------------------------------------
+
+    try:
+
+        await bot.send_media_group(
+            chat_id=REVIEW_CHANNEL_ID,
+            media=media_group,
+        )
+        await bot.send_message(
+            chat_id=REVIEW_CHANNEL_ID,
+            text=(
+                f"📝 <b>{safe_title}</b>\n"
+                f"👀 Code review: <code>{escape(review_code)}</code>\n"
+                f"📦 Code media: <code>{safe_code}</code>\n"
+                f"📦 Total media: <b>{media_count}</b>\n"
+                f"💎 Media: <b>{'PAID' if price > 0 else 'FREE'}</b>\n"
+                f"🤖 Bot: @{safe_bot_username}"
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👀 Buka Review", url=f"https://t.me/{bot_username}?start={review_code}")],
+                [InlineKeyboardButton(text="📦 Buka Code Media", url=f"https://t.me/{bot_username}?start={safe_code}")],
+            ]),
+        )
+
+        logger.info(
+            "PAID REVIEW SENT | code=%s | photos=%s",
+            code,
+            len(review_photos),
+        )
+
+    except TelegramRetryAfter as e:
+
+        retry_after = max(
+            float(e.retry_after),
+            0.5,
+        )
+
+        logger.warning(
+            "REVIEW RATE LIMIT | retry_after=%.2fs | code=%s",
+            retry_after,
+            code,
+        )
+
+        await asyncio.sleep(
+            retry_after + 0.2
+        )
+
+        await bot.send_media_group(
+            chat_id=REVIEW_CHANNEL_ID,
+            media=media_group,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "PAID REVIEW ERROR | code=%s",
+            code,
+        )
+
+        raise
+
+
+# =========================================================
+# SEND UPLOAD LOG
+# =========================================================
 
 async def send_upload_log(
     bot,
@@ -1887,7 +1827,87 @@ async def send_upload_log(
     price: int,
 ):
 
-    # Upload log channel is disabled; upload state is stored in the database and B2.
+    try:
+
+        me = await bot.get_me()
+
+        bot_username = (
+            me.username
+            or "Unknown"
+        )
+
+        # -------------------------------------------------
+        # ESCAPE HTML
+        # -------------------------------------------------
+
+        safe_title = escape(
+            title or "Untitled"
+        )
+
+        safe_bot_username = escape(
+            bot_username
+        )
+
+        safe_code = escape(
+            code
+        )
+
+        mode = (
+            f"💰 PAID {rupiah(price)}"
+            if is_paid
+            else "🆓 FREE"
+        )
+
+        # -------------------------------------------------
+        # CLEAN UPDATE MESSAGE
+        # -------------------------------------------------
+
+        text = (
+            "📤 <b>UPLOAD BARU</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"🤖 Bot: @{safe_bot_username}\n"
+            f"🆔 ID: <code>{mask_user_id(user_id)}</code>\n"
+            f"📝 Judul: {safe_title}\n"
+            f"👀 Code review: <code>{escape(review_code or '-')}</code>\n"
+            f"📦 Code media: <code>{safe_code}</code>\n"
+            f"📦 Total media: {media_count}\n"
+            f"💎 Media: <b>{'PAID' if is_paid else 'FREE'}</b>\n"
+            f"💰 Harga: {rupiah(price) if is_paid else 'Gratis'}"
+        )
+
+        await bot.send_message(
+
+            chat_id=CHANNEL_ID,
+
+            text=text,
+
+            parse_mode="HTML",
+        )
+
+        logger.info(
+            "UPLOAD LOG SENT | code=%s",
+            code,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "UPLOAD LOG ERROR | code=%s",
+            code,
+        )
+
+
+# =========================================================
+# FINAL SAVE
+# =========================================================
+
+async def finalize_save(
+    message: Message,
+    state: FSMContext,
+    user_id: int,
+):
+
+    data = await state.get_data()
 
     # -----------------------------------------------------
     # PREVENT DOUBLE SAVE
@@ -1933,13 +1953,6 @@ async def send_upload_log(
             return await message.answer(
                 "❌ Tidak ada media."
             )
-
-        # =================================================
-        # OPTIONAL B2 BACKUP
-        # =================================================
-        # Telegram file_id remains usable even when B2 is unavailable.
-        # Therefore a B2 failure NEVER aborts the upload.
-        media = await _backup_media_to_b2(message.bot, media)
 
         # =================================================
         # BASIC DATA

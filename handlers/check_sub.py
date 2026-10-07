@@ -89,7 +89,7 @@ async def check_sub_callback(call: CallbackQuery):
             await call.message.edit_text(
                 text,
                 parse_mode="HTML",
-                reply_markup=await join_kb(me.username, user_id, lang)
+                reply_markup=join_kb(me.username, user_id, lang)
             )
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e).lower():

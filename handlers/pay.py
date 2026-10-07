@@ -20,12 +20,15 @@ from aiogram.types import (
     Message,
 )
 from database import fetchrow, fetch, execute
+from utils.media_sender import safe_copy_from_storage
 from utils.redis_client import safe_set, safe_get
 from utils.cashi import Cashi
 from utils.bayargg import BayarGG
 from utils.user_lang import get_user_language
 from utils.payment_methods import payment_methods_enabled
 from config import (
+    STORAGE_CHANNEL_ID,
+    NOTIF_CHANNEL_ID,
     ADMIN_IDS,
     MANUAL_QR_FILE_ID,
     CASHI_API_KEY,
@@ -927,7 +930,7 @@ async def _create_points_provider(call, points_amount: int, price_amount: int, p
                 amount=price_amount,
                 description=f"Buy {points_amount} points",
                 customer_name=call.from_user.full_name,
-                payment_method=None,
+                payment_method="qris",
             )
     except Exception:
         logger.exception("POINT %s CREATE ERROR", provider.upper())
@@ -3245,7 +3248,55 @@ async def complete_success_side_effects(
         logger.exception(
             "SELLER PROFIT ERROR"
         )
-
+    # ========================================================
+    # NOTIFICATION CHANNEL
+    # ========================================================
+    try:
+        if NOTIF_CHANNEL_ID:
+            masked = mask_user_id(
+                user_id
+            )
+            buy_url = (
+                "https://t.me/mktplbot"
+                f"?start={code}"
+            )
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🛒 Buy Now",
+                            url=buy_url,
+                        )
+                    ]
+                ]
+            )
+            payment_name = (
+                "CASHI"
+                if purchase_method(
+                    purchase
+                ) == "cashi"
+                else "MANUAL"
+            )
+            await bot.send_message(
+                NOTIF_CHANNEL_ID,
+                (
+                    "💸 <b>FILE PAYMENT SUCCESS</b>\n\n"
+                    f"📄 Judul: "
+                    f"<b>{clean_html(file.get('title'))}</b>\n"
+                    f"📁 Code: "
+                    f"<code>{clean_html(code)}</code>\n"
+                    f"👤 User: "
+                    f"<code>{masked}</code>\n"
+                    f"💰 Harga: "
+                    f"<b>{format_rupiah(purchase.get('paid_price'))}</b>"
+                ),
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+    except Exception:
+        logger.exception(
+            "PAYMENT NOTIFICATION ERROR"
+        )
     # ========================================================
     # DELETE PAYMENT QR
     # ========================================================

@@ -86,7 +86,7 @@ async def create_bayargg(call:CallbackQuery, code:str, file):
             callback_url=BAYARGG_WEBHOOK_URL or None,
             redirect_url=BOT_URL,
             customer_name=call.from_user.full_name,
-            payment_method=None,
+            payment_method="qris",
         )
     except Exception:
         logger.exception("BAYARGG CREATE ERROR")

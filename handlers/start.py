@@ -235,7 +235,7 @@ async def process_start(
         )
         await loading.edit_text(
             text,
-            reply_markup=await join_kb(bot_username, user_id, lang),
+            reply_markup=join_kb(bot_username, user_id, lang),
             parse_mode="HTML"
         )
 
@@ -744,7 +744,7 @@ async def back_home(
 
             parse_mode="HTML",
 
-            reply_markup=await join_kb(
+            reply_markup=join_kb(
                 bot_username,
                 user_id
             )
@@ -829,7 +829,7 @@ async def choose_language(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text(
             "\n\n".join(lines),
             parse_mode="HTML",
-            reply_markup=await join_kb(me.username, call.from_user.id, lang)
+            reply_markup=join_kb(me.username, call.from_user.id, lang)
         )
         return
 

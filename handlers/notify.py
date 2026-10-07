@@ -39,6 +39,7 @@ CODE_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+
 def normalize_code(code: str) -> str:
     """Normalize a code safely for lookup."""
     if not code:
@@ -106,6 +107,8 @@ def kb_open(code: str, lang: str = "id") -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
 def kb_upload(lang: str = "id") -> InlineKeyboardMarkup:
     labels = {
         "id": "📤 Buat Code / Upload",
@@ -488,13 +491,12 @@ async def notify_text(
     # =====================================================
     # CODE DETECTION
     # =====================================================
-    pastele_match = CODE_REGEX.search(text)
 
-    # If the user pasted a generated "Success Create" message (or any
-    # text containing a code), do NOT deliver immediately. Show the
-    # matching bot-specific Get File button instead.
-    if pastele_match:
-        code = normalize_code(pastele_match.group(0))
+    match = CODE_REGEX.search(text)
+
+    if match:
+        code = normalize_code(match.group(0))
+
         if not code:
             await message.answer(
                 CODE_NOT_FOUND_TEXT[lang],
@@ -503,7 +505,17 @@ async def notify_text(
             )
             return
 
+        # IMPORTANT:
+        # Compare LOWER(code) with LOWER(input).
+        # The previous implementation compared:
+        #
+        #   LOWER(TRIM(code)) = $1
+        #
+        # while $1 could still contain uppercase letters.
+        #
+        # This caused valid Pastelebot codes to return NOT FOUND.
         pool = await get_pool()
+
         exists = await pool.fetchval(
             """
             SELECT EXISTS (
@@ -516,14 +528,20 @@ async def notify_text(
         )
 
         if exists:
-            await message.answer(
-                "🔑 <b>CODE PASTELE TERDETEKSI</b>\n\n"
-                f"📝 Code: <code>{code}</code>\n\n"
-                "Tekan tombol di bawah untuk mengambil file dari Pastele.",
-                parse_mode="HTML",
-                reply_markup=kb_open(code, lang),
-            )
-            return
+            # SINGLE CODE ENTRY POINT:
+            # Every code typed directly in chat must enter the
+            # canonical Get File flow. Do not create a separate
+            # "found code" menu here and do not send media here.
+            try:
+                await message.bot.send_chat_action(
+                    chat_id=message.chat.id,
+                    action=ChatAction.TYPING,
+                )
+            except Exception:
+                pass
+
+            from handlers.getfile import process_code
+            return await process_code(message, code)
 
         await message.answer(
             CODE_NOT_FOUND_TEXT[lang],
