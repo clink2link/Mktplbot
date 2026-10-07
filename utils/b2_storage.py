@@ -8,14 +8,84 @@ import logging
 import mimetypes
 import os
 import re
+import base64
+import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
 import boto3
+from cryptography.fernet import Fernet, InvalidToken
 
+from config import BOT_TOKEN, DATABASE_URL, B2_CREDENTIAL_KEY
 from database import get_pool
 
 logger = logging.getLogger(__name__)
+
+
+_SECRET_PREFIX = "enc:v1:"
+
+
+def _credential_fernet() -> Fernet:
+    """Return the stable Fernet key used for B2 application-key secrets.
+
+    Production should set B2_CREDENTIAL_KEY and keep it unchanged.
+    The legacy BOT_TOKEN|DATABASE_URL derivation remains only for backward
+    compatibility with existing installations.
+    """
+    raw = (B2_CREDENTIAL_KEY or f"{BOT_TOKEN}|{DATABASE_URL}").encode("utf-8")
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+    return Fernet(key)
+
+
+def encrypt_b2_secret(value: str) -> str:
+    value = str(value or "")
+    if value.startswith(_SECRET_PREFIX):
+        return value
+    token = _credential_fernet().encrypt(value.encode("utf-8")).decode("ascii")
+    return _SECRET_PREFIX + token
+
+
+def decrypt_b2_secret(value: str) -> str:
+    value = str(value or "")
+    if not value.startswith(_SECRET_PREFIX):
+        # Backward compatibility for a legacy plaintext row. New writes are
+        # always encrypted; init_db migrates legacy rows when possible.
+        return value
+    token = value[len(_SECRET_PREFIX):]
+    try:
+        return _credential_fernet().decrypt(token.encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError, TypeError):
+        raise RuntimeError("B2 application key tidak dapat didekripsi")
+
+
+def log_b2_credential_key_status() -> None:
+    if not B2_CREDENTIAL_KEY:
+        logger.warning(
+            "B2_CREDENTIAL_KEY is not set; using the legacy derived key. "
+            "Set a stable B2_CREDENTIAL_KEY for production."
+        )
+
+
+async def migrate_b2_credentials() -> int:
+    """Encrypt any legacy plaintext B2 application keys in-place."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT account_id, application_key FROM b2_storage_accounts"
+    )
+    changed = 0
+    for row in rows:
+        value = str(row["application_key"] or "")
+        if value.startswith(_SECRET_PREFIX):
+            continue
+        await pool.execute(
+            "UPDATE b2_storage_accounts SET application_key=$1, updated_at=NOW() "
+            "WHERE account_id=$2",
+            encrypt_b2_secret(value), int(row["account_id"])
+        )
+        changed += 1
+    if changed:
+        logger.info("🔐 Encrypted %s legacy B2 credential(s)", changed)
+    return changed
 
 
 def _safe_name(value: str) -> str:
@@ -36,7 +106,12 @@ async def get_b2_accounts() -> list[dict[str, Any]]:
         ORDER BY is_target DESC, account_id ASC
         """
     )
-    return [dict(r) for r in rows]
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["application_key"] = decrypt_b2_secret(item["application_key"])
+        result.append(item)
+    return result
 
 
 async def get_b2_account(account_id: int) -> Optional[dict[str, Any]]:
@@ -50,7 +125,11 @@ async def get_b2_account(account_id: int) -> Optional[dict[str, Any]]:
         """,
         int(account_id),
     )
-    return dict(row) if row else None
+    if not row:
+        return None
+    item = dict(row)
+    item["application_key"] = decrypt_b2_secret(item["application_key"])
+    return item
 
 
 async def get_upload_account() -> Optional[dict[str, Any]]:

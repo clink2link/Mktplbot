@@ -11,6 +11,24 @@ from typing import Any, Optional
 
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest, TelegramForbiddenError
 
+async def _safety_setting(key: str, default):
+    try:
+        from database import get_pool
+        pool = await get_pool()
+        value = await pool.fetchval("SELECT value FROM settings WHERE key=$1", key)
+        return value if value is not None else default
+    except Exception:
+        return default
+
+async def _safety_delay(kind: str, default: float = 0.0) -> float:
+    enabled = str(await _safety_setting("telegram_safety_enabled", "on")).lower() in {"1", "true", "on", "yes"}
+    if not enabled:
+        return 0.0
+    try:
+        return max(0.0, float(await _safety_setting(kind, str(default))))
+    except Exception:
+        return default
+
 
 def _storage_chat_id() -> Optional[int]:
     try:
@@ -35,6 +53,9 @@ async def safe_copy_from_storage(bot, chat_id: int, message_id: int, **kwargs):
 
     for attempt in range(4):
         try:
+            delay = await _safety_delay("telegram_storage_delay", 1.0)
+            if delay:
+                await asyncio.sleep(delay)
             return await bot.copy_message(
                 chat_id=chat_id,
                 from_chat_id=storage,
@@ -88,6 +109,9 @@ async def safe_send_file_id(bot, chat_id: int, media: dict, caption: Optional[st
 
     for attempt in range(4):
         try:
+            delay = await _safety_delay("telegram_user_send_delay", 2.0)
+            if delay:
+                await asyncio.sleep(delay)
             if file_type in {"photo", "image"}:
                 return await bot.send_photo(photo=file_id, **kwargs)
             if file_type in {"video"}:
