@@ -9,7 +9,6 @@ from database import get_pool
 
 from handlers.withdraw.utils import (
     withdraw_is_open,
-    withdraw_feature_enabled,
     rupiah,
     MIN_WITHDRAW,
     WITHDRAW_FEE,
@@ -75,9 +74,6 @@ async def check_creator(call: CallbackQuery) -> bool:
 
 @router.callback_query(F.data == "withdraw")
 async def withdraw_menu(call: CallbackQuery):
-
-    if not await withdraw_feature_enabled():
-        return await call.answer("🔴 Withdraw sedang dinonaktifkan admin.", show_alert=True)
 
     # =====================================
     # WAJIB KREATOR
@@ -179,9 +175,6 @@ async def withdraw_menu(call: CallbackQuery):
 
 @router.callback_query(F.data == "withdraw_create")
 async def withdraw_create(call: CallbackQuery):
-
-    if not await withdraw_feature_enabled():
-        return await call.answer("🔴 Withdraw sedang dinonaktifkan admin.", show_alert=True)
 
     # =====================================
     # WAJIB KREATOR
@@ -315,9 +308,6 @@ async def withdraw_create(call: CallbackQuery):
 
 @router.callback_query(F.data == "withdraw_instant")
 async def withdraw_instant(call: CallbackQuery):
-
-    if not await withdraw_feature_enabled():
-        return await call.answer("🔴 Withdraw sedang dinonaktifkan admin.", show_alert=True)
 
     # =====================================
     # WAJIB KREATOR

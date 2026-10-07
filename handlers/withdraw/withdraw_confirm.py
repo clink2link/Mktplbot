@@ -13,7 +13,6 @@ from handlers.withdraw.utils import (
     WITHDRAW_FEE,
     rupiah,
     withdraw_is_open,
-    withdraw_feature_enabled,
 )
 router = Router()
 logger = logging.getLogger(__name__)
@@ -75,8 +74,6 @@ async def get_user_payment_method(
 async def withdraw_confirm(
     call: CallbackQuery,
 ):
-    if not await withdraw_feature_enabled():
-        return await call.answer("🔴 Withdraw sedang dinonaktifkan admin.", show_alert=True)
     await call.answer()
     if not withdraw_is_open():
         return await call.answer(
@@ -295,8 +292,6 @@ async def withdraw_confirm(
 async def withdraw_instant_confirm(
     call: CallbackQuery,
 ):
-    if not await withdraw_feature_enabled():
-        return await call.answer("🔴 Withdraw sedang dinonaktifkan admin.", show_alert=True)
     await call.answer()
     pool = await get_pool()
     withdraw_id = None

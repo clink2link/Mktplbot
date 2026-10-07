@@ -1,17 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-async def withdraw_feature_enabled() -> bool:
-    try:
-        from database import get_pool
-        pool = await get_pool()
-        value = await pool.fetchval("SELECT value FROM settings WHERE key=$1", "withdraw_enabled")
-        return str(value if value is not None else "on").lower() in {"1", "true", "on", "yes"}
-    except Exception:
-        # Fail closed for a control-plane setting: if the DB cannot confirm
-        # withdrawals are enabled, do not create a new withdrawal.
-        return False
-
 
 __all__ = [
     "WIB",
@@ -24,7 +13,6 @@ __all__ = [
     "INSTANT_MIN_BALANCE",
     "WITHDRAW_NOMINALS",
     "withdraw_is_open",
-    "withdraw_feature_enabled",
     "rupiah",
     "mask_name",
     "mask_account",
