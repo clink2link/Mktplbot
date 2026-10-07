@@ -1,8 +1,7 @@
 """Backblaze B2 storage helpers for Pastele.
 
 B2 is an optional secondary copy. Telegram file_id remains the canonical
-fallback for Pastele uploads. The Showjs bridge is B2-only and must never
-use Showjs Telegram file_id because it belongs to a different bot.
+fallback, so a B2 outage must never make an upload fail.
 """
 import asyncio
 import logging
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import boto3
-from botocore.config import Config
+from botocore.config import Config as BotoConfig
 from cryptography.fernet import Fernet, InvalidToken
 
 from config import BOT_TOKEN, DATABASE_URL, B2_CREDENTIAL_KEY
@@ -23,11 +22,17 @@ from database import get_pool
 
 logger = logging.getLogger(__name__)
 
+
 _SECRET_PREFIX = "enc:v1:"
 
 
 def _credential_fernet() -> Fernet:
-    """Return the stable Fernet key used for B2 application-key secrets."""
+    """Return the stable Fernet key used for B2 application-key secrets.
+
+    Production should set B2_CREDENTIAL_KEY and keep it unchanged.
+    The legacy BOT_TOKEN|DATABASE_URL derivation remains only for backward
+    compatibility with existing installations.
+    """
     raw = (B2_CREDENTIAL_KEY or f"{BOT_TOKEN}|{DATABASE_URL}").encode("utf-8")
     key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
     return Fernet(key)
@@ -44,13 +49,12 @@ def encrypt_b2_secret(value: str) -> str:
 def decrypt_b2_secret(value: str) -> str:
     value = str(value or "")
     if not value.startswith(_SECRET_PREFIX):
+        # Backward compatibility for a legacy plaintext row. New writes are
+        # always encrypted; init_db migrates legacy rows when possible.
         return value
-
     token = value[len(_SECRET_PREFIX):]
     try:
-        return _credential_fernet().decrypt(
-            token.encode("ascii")
-        ).decode("utf-8")
+        return _credential_fernet().decrypt(token.encode("ascii")).decode("utf-8")
     except (InvalidToken, ValueError, TypeError):
         raise RuntimeError("B2 application key tidak dapat didekripsi")
 
@@ -70,26 +74,18 @@ async def migrate_b2_credentials() -> int:
         "SELECT account_id, application_key FROM b2_storage_accounts"
     )
     changed = 0
-
     for row in rows:
         value = str(row["application_key"] or "")
         if value.startswith(_SECRET_PREFIX):
             continue
-
         await pool.execute(
-            """
-            UPDATE b2_storage_accounts
-            SET application_key=$1, updated_at=NOW()
-            WHERE account_id=$2
-            """,
-            encrypt_b2_secret(value),
-            int(row["account_id"]),
+            "UPDATE b2_storage_accounts SET application_key=$1, updated_at=NOW() "
+            "WHERE account_id=$2",
+            encrypt_b2_secret(value), int(row["account_id"])
         )
         changed += 1
-
     if changed:
         logger.info("🔐 Encrypted %s legacy B2 credential(s)", changed)
-
     return changed
 
 
@@ -97,51 +93,6 @@ def _safe_name(value: str) -> str:
     value = str(value or "file").strip()
     value = re.sub(r"[^A-Za-z0-9._-]+", "_", value)
     return value[:180] or "file"
-
-
-def _normalize_b2_region(value: Any) -> str:
-    """Normalize B2 region values into a boto3-compatible region.
-
-    Accepts:
-      us-east-005
-      s3.us-east-005.backblazeb2.com
-      https://s3.us-east-005.backblazeb2.com
-      other strings containing a B2 region
-    """
-    value = str(value or "").strip().lower()
-
-    if not value:
-        return "us-east-005"
-
-    if re.fullmatch(r"us-[a-z]+-\d+", value):
-        return value
-
-    match = re.search(
-        r"(us-[a-z]+-\d+)\.backblazeb2\.com",
-        value,
-        re.IGNORECASE,
-    )
-    if match:
-        return match.group(1).lower()
-
-    match = re.search(r"(us-[a-z]+-\d+)", value, re.IGNORECASE)
-    if match:
-        return match.group(1).lower()
-
-    return value
-
-
-def _normalize_b2_endpoint(value: Any, region: str) -> str:
-    """Normalize endpoint to a valid Backblaze S3 endpoint URL."""
-    endpoint = str(value or "").strip()
-
-    if not endpoint:
-        return f"https://s3.{region}.backblazeb2.com"
-
-    if not endpoint.startswith(("http://", "https://")):
-        endpoint = f"https://{endpoint}"
-
-    return endpoint.rstrip("/")
 
 
 async def get_b2_accounts() -> list[dict[str, Any]]:
@@ -156,13 +107,11 @@ async def get_b2_accounts() -> list[dict[str, Any]]:
         ORDER BY is_target DESC, account_id ASC
         """
     )
-
     result = []
     for row in rows:
         item = dict(row)
         item["application_key"] = decrypt_b2_secret(item["application_key"])
         result.append(item)
-
     return result
 
 
@@ -177,10 +126,8 @@ async def get_b2_account(account_id: int) -> Optional[dict[str, Any]]:
         """,
         int(account_id),
     )
-
     if not row:
         return None
-
     item = dict(row)
     item["application_key"] = decrypt_b2_secret(item["application_key"])
     return item
@@ -191,59 +138,87 @@ async def get_upload_account() -> Optional[dict[str, Any]]:
     return accounts[0] if accounts else None
 
 
+def _normalize_b2_region(region: str, endpoint: str = "") -> str:
+    """Normalize a Backblaze region/hostname into a boto3 region."""
+    value = str(region or "").strip().strip("/")
+    host = str(endpoint or "").strip().rstrip("/")
+    if "://" in host:
+        host = host.split("://", 1)[1].split("/", 1)[0]
+    else:
+        host = host.split("/", 1)[0]
+
+    for candidate in (value, host):
+        c = candidate.strip()
+        if "://" in c:
+            c = c.split("://", 1)[1].split("/", 1)[0]
+        m = re.search(r"(?:^|\.)s3\.(us-[a-z]+-\d+)\.backblazeb2\.com$", c, re.I)
+        if m:
+            return m.group(1).lower()
+        m = re.search(r"(us-[a-z]+-\d+)", c, re.I)
+        if m:
+            return m.group(1).lower()
+    return ""
+
+
+def _normalize_b2_endpoint(endpoint: str, region: str) -> str:
+    """Normalize malformed Backblaze S3 endpoints to the canonical endpoint."""
+    ep = str(endpoint or "").strip().rstrip("/")
+    if not region:
+        return (ep if ep.startswith(("http://", "https://")) else ("https://" + ep if ep else ""))
+
+    host = ep
+    if "://" in host:
+        host = host.split("://", 1)[1].split("/", 1)[0]
+    else:
+        host = host.split("/", 1)[0]
+
+    # Backblaze's canonical S3 endpoint. Fix values such as
+    # s3.s3.us-east-005.backblazeb2.com.backblazeb2.com.
+    if "backblazeb2.com" in host.lower() or not ep:
+        return f"https://s3.{region}.backblazeb2.com"
+
+    return ep if ep.startswith(("http://", "https://")) else "https://" + ep
+
+
 def _client(account: dict[str, Any]):
-    """Create a Backblaze B2 S3 client with normalized region/endpoint."""
-    region = _normalize_b2_region(account.get("region"))
-    endpoint = _normalize_b2_endpoint(account.get("endpoint"), region)
+    """Create a Backblaze B2 S3 client with a valid Boto3 region."""
+    raw_region = str(account.get("region") or "").strip()
+    endpoint = str(account.get("endpoint") or "").strip().rstrip("/")
+    region = _normalize_b2_region(raw_region, endpoint)
+    endpoint = _normalize_b2_endpoint(endpoint, region)
 
     kwargs = {
         "service_name": "s3",
-        "aws_access_key_id": account["key_id"],
-        "aws_secret_access_key": account["application_key"],
-        "region_name": region,
-        "endpoint_url": endpoint,
-        "config": Config(
+        "aws_access_key_id": str(account["key_id"]).strip(),
+        "aws_secret_access_key": str(account["application_key"]).strip(),
+        "region_name": region or None,
+        "config": BotoConfig(
             signature_version="s3v4",
-            s3={"addressing_style": "path"},
-            retries={
-                "max_attempts": 3,
-                "mode": "standard",
-            },
+            connect_timeout=30,
+            read_timeout=120,
+            retries={"max_attempts": 3, "mode": "standard"},
         ),
     }
-
-    logger.debug(
-        "B2 CLIENT | account=%s | region=%s | endpoint=%s | bucket=%s",
-        account.get("account_id"),
-        region,
-        endpoint,
-        account.get("bucket"),
-    )
-
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
     return boto3.client(**kwargs)
 
 
-def _upload_sync(
-    account: dict[str, Any],
-    local_path: str,
-    object_key: str,
-    content_type: Optional[str],
-    file_size: int,
-) -> dict[str, Any]:
+def _upload_sync(account: dict[str, Any], local_path: str, object_key: str,
+                 content_type: Optional[str], file_size: int) -> dict[str, Any]:
     client = _client(account)
-
     extra = {}
     if content_type:
         extra["ContentType"] = content_type
-
     with open(local_path, "rb") as fh:
-        client.upload_fileobj(
-            fh,
-            account["bucket"],
-            object_key,
-            ExtraArgs=extra if extra else None,
-        )
-
+        if extra:
+            client.upload_fileobj(
+                fh, account["bucket"], object_key, ExtraArgs=extra
+            )
+        else:
+            client.upload_fileobj(
+                fh, account["bucket"], object_key
+            )
     return {
         "account_id": int(account["account_id"]),
         "bucket": account["bucket"],
@@ -262,14 +237,16 @@ async def upload_file_to_b2(
     account_id: Optional[int] = None,
     object_prefix: str = "pastelebot",
 ) -> Optional[dict[str, Any]]:
-    """Upload one local file to the configured B2 account."""
+    """Upload one local file to the configured B2 account.
+
+    Returns None on any B2 failure. Callers must keep Telegram file_id.
+    """
     try:
         account = (
             await get_b2_account(account_id)
             if account_id
             else await get_upload_account()
         )
-
         if not account:
             return None
 
@@ -286,20 +263,13 @@ async def upload_file_to_b2(
             ctype,
             size,
         )
-
         logger.info(
             "B2 UPLOAD OK | account=%s | key=%s | size=%s",
-            result["account_id"],
-            result["object_key"],
-            result["file_size"],
+            result["account_id"], result["object_key"], result["file_size"],
         )
-
         return result
-
     except Exception:
-        logger.exception(
-            "B2 UPLOAD FAILED; Telegram file_id remains fallback"
-        )
+        logger.exception("B2 UPLOAD FAILED; Telegram file_id remains fallback")
         return None
 
 
@@ -308,44 +278,25 @@ async def download_file_from_b2(
     object_key: str,
     destination: str,
 ) -> bool:
-    """Download one B2 object.
+    """Download one B2 object to a local file.
 
-    Showjs bridge uses B2 only. No Telegram file_id fallback is performed here.\n    Availability is determined by the actual download, not HeadObject.
+    Used by the Showjs bridge. Failures are returned as False so the caller
+    can show a controlled error instead of crashing the bot.
     """
-    account = None
-
     try:
         account = await get_b2_account(int(account_id))
-
         if not account:
-            logger.error(
-                "B2 DOWNLOAD: account %s not configured",
-                account_id,
-            )
+            logger.error("B2 DOWNLOAD: account %s not configured", account_id)
             return False
-
-        object_key = str(object_key or "").strip()
-
-        if not object_key:
-            logger.error(
-                "B2 DOWNLOAD: empty object key | account=%s",
-                account_id,
-            )
-            return False
-
-        destination = str(destination)
 
         def _download_sync():
             client = _client(account)
-
-            # boto3 download_file() internally calls HeadObject first.
-            # Some B2 application keys can read objects but are not permitted
-            # to call HeadObject, so use GetObject directly instead.
-            response = client.get_object(
-                Bucket=account["bucket"],
-                Key=object_key,
-            )
-
+            bucket = str(account["bucket"]).strip()
+            key = str(object_key).lstrip("/")
+            # boto3 download_file() internally calls HeadObject. Some B2 keys
+            # can be permitted to read objects without HeadObject permission,
+            # so stream the object directly with GetObject.
+            response = client.get_object(Bucket=bucket, Key=key)
             body = response["Body"]
             try:
                 with open(destination, "wb") as fh:
@@ -358,51 +309,17 @@ async def download_file_from_b2(
                 body.close()
 
         await asyncio.to_thread(_download_sync)
-
-        if not os.path.isfile(destination):
-            logger.error(
-                "B2 DOWNLOAD FAILED: destination missing | account=%s | key=%s",
-                account_id,
-                object_key,
-            )
-            return False
-
-        if os.path.getsize(destination) <= 0:
-            logger.error(
-                "B2 DOWNLOAD FAILED: empty destination | account=%s | key=%s",
-                account_id,
-                object_key,
-            )
-            try:
-                os.remove(destination)
-            except OSError:
-                pass
-            return False
-
         logger.info(
-            "B2 DOWNLOAD OK | account=%s | bucket=%s | key=%s | size=%s",
-            account_id,
-            account["bucket"],
-            object_key,
-            os.path.getsize(destination),
+            "B2 DOWNLOAD OK | account=%s | bucket=%s | key=%s",
+            account_id, account.get("bucket"), object_key,
         )
-
         return True
-
     except Exception as exc:
         logger.exception(
-            "B2 DOWNLOAD FAILED | account=%s | key=%s | error=%s",
-            account_id,
-            object_key,
-            str(exc)[:300],
+            "B2 DOWNLOAD FAILED | account=%s | bucket=%s | region=%s | endpoint=%s | key=%s | error=%s",
+            account_id, account.get("bucket"), account.get("region"),
+            account.get("endpoint"), object_key, str(exc)[:500],
         )
-
-        try:
-            if destination and os.path.exists(destination):
-                os.remove(destination)
-        except OSError:
-            pass
-
         return False
 
 
@@ -410,16 +327,8 @@ async def check_b2_account(account_id: int) -> dict[str, Any]:
     """Non-destructive B2 health check for the Admin panel."""
     try:
         account = await get_b2_account(int(account_id))
-
         if not account:
-            return {
-                "ok": False,
-                "account_id": int(account_id),
-                "error": "account_not_configured",
-            }
-
-        region = _normalize_b2_region(account.get("region"))
-        endpoint = _normalize_b2_endpoint(account.get("endpoint"), region)
+            return {"ok": False, "account_id": int(account_id), "error": "account_not_configured"}
 
         def _check():
             client = _client(account)
@@ -427,21 +336,14 @@ async def check_b2_account(account_id: int) -> dict[str, Any]:
             return True
 
         await asyncio.to_thread(_check)
-
         return {
             "ok": True,
             "account_id": int(account_id),
             "bucket": account["bucket"],
-            "region": region,
-            "endpoint": endpoint,
+            "region": account["region"],
         }
-
     except Exception as exc:
-        logger.warning(
-            "B2 HEALTH FAILED | account=%s | %s",
-            account_id,
-            exc,
-        )
+        logger.warning("B2 HEALTH FAILED | account=%s | %s", account_id, exc)
         return {
             "ok": False,
             "account_id": int(account_id),
