@@ -495,7 +495,7 @@ async def start_upload(
 
         return await call.message.answer(
             "❌ Kamu belum join channel.",
-            reply_markup=join_kb(),
+            reply_markup=await join_kb(),
         )
 
     # -----------------------------------------------------
@@ -799,12 +799,11 @@ async def receive_media(
             )
 
         # -------------------------------------------------
-        # FILE_ID STORAGE
+        # PRIMARY STORAGE: TELEGRAM FILE_ID
         # -------------------------------------------------
-        # Media is stored by Telegram file_id only. No storage channel,
-        # copy_message, or storage migration is used for uploads.
-        # file_id remains reusable by this bot after the original message
-        # is deleted, so the user's chat does not become the storage.
+        # Every upload keeps Telegram file_id as the primary/fast path.
+        # Small media (<20 MiB) is additionally backed up to B2 after
+        # the upload batch is collected.
         source_chat_id = int(message.chat.id)
 
         # -------------------------------------------------
@@ -1542,12 +1541,132 @@ async def receive_review_photo(
 
 
 # =========================================================
+# B2 BACKUP FOR SMALL MEDIA
+# =========================================================
+# Telegram file_id remains the primary/fast delivery method.
+# Media strictly smaller than 20 MiB is also copied to B2 so the
+# database keeps a bot-independent backup. If Telegram is later
+# replaced/banned, media_sender can fall back to this B2 object.
+B2_BACKUP_MAX_BYTES = 20 * 1024 * 1024
+
+
+async def _backup_media_to_b2(bot, media: list[dict]) -> list[dict]:
+    """Create a B2 backup for every media item smaller than 20 MiB.
+
+    This never replaces Telegram file_id and never makes an upload fail.
+    B2 metadata is stored inside the media JSON.
+    """
+    result = []
+
+    for item in media:
+        item = dict(item)
+        size = int(item.get("file_size") or 0)
+
+        if not item.get("file_id") or size <= 0 or size >= B2_BACKUP_MAX_BYTES:
+            result.append(item)
+            continue
+
+        tmp_path = None
+        try:
+            tg_file = await bot.get_file(item["file_id"])
+            file_path = getattr(tg_file, "file_path", None)
+            if not file_path:
+                raise RuntimeError("Telegram file_path tidak tersedia")
+
+            suffix = ""
+            name = str(item.get("file_name") or "media")
+            if "." in name:
+                suffix = "." + name.rsplit(".", 1)[-1][:12]
+
+            fd, tmp_path = tempfile.mkstemp(
+                prefix="pastele_b2_backup_",
+                suffix=suffix,
+            )
+            os.close(fd)
+
+            await bot.download_file(file_path, destination=tmp_path)
+
+            backup = await upload_file_to_b2(
+                tmp_path,
+                file_name=name,
+                content_type=_media_content_type(item),
+            )
+
+            if backup:
+                item["b2_backup"] = True
+                item["b2_storage"] = "backblaze_b2"
+                item["b2_account_id"] = int(backup["account_id"])
+                item["b2_bucket"] = str(backup["bucket"])
+                item["b2_object_key"] = str(backup["object_key"])
+                item["b2_file_size"] = int(backup.get("file_size") or size)
+                item["b2_content_type"] = str(
+                    backup.get("content_type") or "application/octet-stream"
+                )
+                item["storage_status"] = "telegram_file_id+b2"
+                logger.info(
+                    "B2 BACKUP OK | file_id=%s | account=%s | key=%s | size=%s",
+                    str(item["file_id"])[:24],
+                    backup["account_id"],
+                    backup["object_key"],
+                    size,
+                )
+            else:
+                item["b2_backup"] = False
+                item["storage_status"] = "telegram_file_id_only"
+                logger.warning(
+                    "B2 BACKUP SKIPPED/FAILED | file=%s | size=%s",
+                    name,
+                    size,
+                )
+
+        except Exception:
+            item["b2_backup"] = False
+            item["storage_status"] = "telegram_file_id_only"
+            logger.exception(
+                "B2 BACKUP FAILED | file=%s | size=%s",
+                item.get("file_name") or "media",
+                size,
+            )
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+        result.append(item)
+
+    return result
+
+
+def _media_content_type(item: dict) -> str | None:
+    """Best-effort MIME type for the B2 object."""
+    explicit = item.get("mime_type") or item.get("content_type")
+    if explicit:
+        return str(explicit)
+
+    file_type = str(item.get("type") or "").lower()
+    if file_type == "video":
+        return "video/mp4"
+    if file_type in {"photo", "image"}:
+        return "image/jpeg"
+    if file_type == "audio":
+        return "audio/mpeg"
+    if file_type in {"animation", "gif"}:
+        return "image/gif"
+    return None
+
+
+
+
+# =========================================================
 # FINISH REVIEW
 # =========================================================
 
 @router.callback_query(
     F.data == "finish_review"
 )
+
 async def finish_review(
     call: CallbackQuery,
     state: FSMContext,

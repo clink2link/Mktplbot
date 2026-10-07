@@ -38,11 +38,6 @@ CODE_REGEX = re.compile(
     r"(?<![A-Za-z0-9])Pastelebot_[A-Za-z0-9]{14}(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
-SHOWJS_CODE_REGEX = re.compile(
-    r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]+_[0-9]+p[0-9]+v[0-9]+d(?![A-Za-z0-9])",
-    re.IGNORECASE,
-)
-
 
 def normalize_code(code: str) -> str:
     """Normalize a code safely for lookup."""
@@ -111,26 +106,6 @@ def kb_open(code: str, lang: str = "id") -> InlineKeyboardMarkup:
             ]
         ]
     )
-
-
-
-def kb_open_showjs(code: str, lang: str = "id") -> InlineKeyboardMarkup:
-    labels = {
-        "id": "📂 Get File Jsshow",
-        "en": "📂 Get File Jsshow",
-        "zh": "📂 获取 Jsshow 文件",
-    }
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=labels.get(lang, labels["id"]),
-                    callback_data=f"open_showjs:{code}",
-                )
-            ]
-        ]
-    )
-
 def kb_upload(lang: str = "id") -> InlineKeyboardMarkup:
     labels = {
         "id": "📤 Buat Code / Upload",
@@ -513,23 +488,11 @@ async def notify_text(
     # =====================================================
     # CODE DETECTION
     # =====================================================
-    showjs_match = SHOWJS_CODE_REGEX.search(text)
     pastele_match = CODE_REGEX.search(text)
 
     # If the user pasted a generated "Success Create" message (or any
     # text containing a code), do NOT deliver immediately. Show the
     # matching bot-specific Get File button instead.
-    if showjs_match:
-        code = normalize_code(showjs_match.group(0))
-        await message.answer(
-            "🔑 <b>CODE JSSHOW TERDETEKSI</b>\n\n"
-            f"📝 Code: <code>{code}</code>\n\n"
-            "Tekan tombol di bawah untuk mengambil file dari Jsshow.",
-            parse_mode="HTML",
-            reply_markup=kb_open_showjs(code, lang),
-        )
-        return
-
     if pastele_match:
         code = normalize_code(pastele_match.group(0))
         if not code:

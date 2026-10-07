@@ -180,11 +180,6 @@ CODE_EXACT_RE = re.compile(
     rf"^\\s*{re.escape(CODE_PREFIX)}[A-Za-z0-9]{{{CODE_SUFFIX_LENGTH}}}\\s*$",
     re.IGNORECASE,
 )
-SHOWJS_CODE_INLINE_RE = re.compile(
-    r"(?<![A-Za-z0-9])Jsshowbot_[A-Za-z0-9]+_[0-9]+p[0-9]+v[0-9]+d(?![A-Za-z0-9])",
-    re.IGNORECASE,
-)
-
 
 def normalize_code(code: str) -> str:
     """
@@ -806,8 +801,7 @@ async def receive_code_global(
     the Open Page/Open All loading flow and must never show
     "Mencari Media Code..." merely because the CODE was sent directly.
 
-    We accept the configured Pastelebot_ format and the legacy
-    Jsshowbot_ format so existing shared codes are handled too.
+    We accept the configured Pastelebot_ format.
     """
     text = (message.text or "").strip()
     if not text:
@@ -879,8 +873,6 @@ async def receive_code(
         ).strip()
 
         match = CODE_REGEX.search(text)
-        if not match:
-            match = SHOWJS_CODE_INLINE_RE.search(text)
 
         # ====================================================
         # INVALID CODE
