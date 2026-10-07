@@ -194,7 +194,14 @@ async def _safe_send_b2(bot, chat_id: int, media: dict, caption: Optional[str] =
                 kwargs = {"chat_id": chat_id, "caption": caption}
 
                 if file_type in {"photo", "image"}:
-                    return await bot.send_photo(photo=inp, **kwargs)
+                    try:
+                        return await bot.send_photo(photo=inp, **kwargs)
+                    except TelegramBadRequest:
+                        # Telegram photo uploads have stricter limits than
+                        # documents. A B2 backup must still be recoverable,
+                        # so retry the same bytes as a document.
+                        inp = FSInputFile(tmp_path, filename=name)
+                        return await bot.send_document(document=inp, **kwargs)
                 if file_type == "video":
                     return await bot.send_video(video=inp, **kwargs)
                 if file_type == "audio":
@@ -202,13 +209,23 @@ async def _safe_send_b2(bot, chat_id: int, media: dict, caption: Optional[str] =
                 if file_type == "voice":
                     return await bot.send_voice(voice=inp, **kwargs)
                 if file_type in {"animation", "gif"}:
-                    return await bot.send_animation(animation=inp, **kwargs)
+                    try:
+                        return await bot.send_animation(animation=inp, **kwargs)
+                    except TelegramBadRequest:
+                        inp = FSInputFile(tmp_path, filename=name)
+                        return await bot.send_document(document=inp, **kwargs)
                 return await bot.send_document(document=inp, **kwargs)
 
             except TelegramRetryAfter as exc:
                 await _retry_sleep(exc)
-            except (TelegramBadRequest, TelegramForbiddenError):
+            except TelegramForbiddenError:
                 return None
+            except TelegramBadRequest:
+                # Keep retrying transient delivery failures; the outer
+                # fallback will report failure only after all attempts.
+                if attempt >= 3:
+                    return None
+                await asyncio.sleep(1.5)
             except Exception:
                 if attempt >= 3:
                     return None
