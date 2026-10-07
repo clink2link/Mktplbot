@@ -80,7 +80,6 @@ from handlers.sendall import router as sendall_router
 from handlers.menu import router as menu_router
 # FILE SYSTEM
 from handlers.upfile import router as upfile_router
-from handlers.getfile_showjs import router as getfile_showjs_router
 from handlers.getfile import router as getfile_router
 from handlers.review_code import router as review_code_router
 from handlers.getreview import router as getreview_router
@@ -149,7 +148,6 @@ dp.include_router(menu_router)
 dp.include_router(upfile_router)
 # Review codes must be handled before the global Get File text handler.
 dp.include_router(review_code_router)
-dp.include_router(getfile_showjs_router)
 dp.include_router(getfile_router)
 dp.include_router(getreview_router)
 dp.include_router(page_router)
