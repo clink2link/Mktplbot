@@ -20,7 +20,8 @@ def _caption(code, index, total, media):
         return str(watermark)
     return (
         f"🔑 {code}-M{index:03d}\n"
-        f"🤖 @Telecodrobot\n"
+        f"🤖 @Mktplbot\n"
+        f"📢 @filejsshow\n"
         f"📦 Media {index}/{total}"
     )
 
