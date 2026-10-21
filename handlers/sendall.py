@@ -21,7 +21,7 @@ def _caption(code, index, total, media):
     return (
         f"🔑 {code}-M{index:03d}\n"
         f"🤖 @Mktplbot\n"
-        f"📢 @filejsshow\n"
+        f"Join Channel 👉🏼 @filejsshow 👈🏻\n"
         f"📦 Media {index}/{total}"
     )
 
